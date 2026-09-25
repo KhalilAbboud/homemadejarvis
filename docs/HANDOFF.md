@@ -1,23 +1,24 @@
 # Session Handoff State
 
 ## Last Completed Task
-- Successfully built and verified Module 2 (`src/brain.py`).
-- Resolved Gemini API model endpoint error and confirmed working dual-mode execution (`api` mode via Gemini and `local` mode via Ollama `qwen2.5-coder:1.5b`).
+- Module 2 (`brain.py`): dual-mode LLM router (`local` via Ollama `qwen2.5-coder:1.5b`, `api` via Gemini), async streaming, error handling. **Note:** architecture doc lists Anthropic/DeepSeek/OpenAI for API mode, but the actual API engine implemented is Gemini (`google-genai` SDK) — flagging in case that's intentional drift or needs reconciling.
+- Module 1 (`stt.py`): `faster-whisper` + `sounddevice`. Single continuously-open `InputStream`, RMS-based silence trimming, configurable device/thresholds via env. Lazy-loaded model singleton, `warm_up()` for early load.
+- Module 3 (`tts.py`): multi-engine (`piper` default, `edge`, `pyttsx3`), sentence-chunked synthesis, SHA256-keyed audio cache, Windows-specific playback path (`winsound`) with `playsound` fallback, leading-silence padding for Windows device wake-up.
+- Orchestrator (`main.py`): wires STT → streamed brain output → TTS, speaking completed sentences while the rest of the reply still streams (producer/consumer queue). Exit-phrase detection, per-stage error isolation (STT/LLM/TTS failures don't crash the loop).
+- Diagnostics: `test_mic.py` (bare `sd.rec` capture check) and `test_chunks.py` (per-chunk RMS to inspect mic startup latency) — used to debug mic/device issues, not part of the runtime pipeline.
+- `.env` (`fakeenv.txt` as template): `LLM_MODE`, `GEMINI_API_KEY`, Whisper/TTS/mic config, includes `STT_INPUT_DEVICE=2` for a Bluetooth earbud mic that required pinning.
 
 ## Current State
-- `src/brain.py` is fully functional, async-compatible, and tested.
-- `.env` is configured with `LLM_MODE` and `GEMINI_API_KEY`.
+- Modules 1–3 and the orchestrator are built, decoupled (no cross-imports between stt/tts/brain), and async throughout per project coding rules.
+- End-to-end voice loop (listen → think → speak) is functional.
 
-## Project Roadmap (Next 6 Steps)
-1. **Step 1 (Immediate):** Build Module 1 (`src/stt.py`) — Speech-to-Text using `faster-whisper` to record and transcribe microphone input.
-2. **Step 2:** Build Module 3 (`src/tts.py`) — Text-to-Speech using `edge-tts` or `pyttsx3` to give JARVIS a voice.
-3. **Step 3:** Build Orchestrator (`src/main.py`) — Wire STT -> Brain -> TTS together into a basic continuous voice conversation loop.
-4. **Step 4:** Build Module 4 (`src/tools.py`) — Add tool execution / system functions (opening apps, running terminal commands, checking system specs).
-5. **Step 5:** Add Wake Word (`src/wake_word.py`) — Implement passive "Hey JARVIS" wake word detection using `openwakeword`.
-6. **Step 6:** Conversation Memory — Add short-term chat history management so JARVIS remembers recent turns during a voice session.
+## Project Roadmap (Remaining Steps)
+1. **Step 4 (Next):** Build Module 4 (`tools.py`) — system commands, app launcher, web scraper, and wire tool-calling into `brain.py`'s API-mode path.
+2. **Step 5:** Add wake word (`wake_word.py`) — passive "Hey JARVIS" detection via `openwakeword`, gating `listen_and_transcribe()`.
+3. **Step 6:** Conversation memory — short-term chat history across turns in a voice session (currently each turn is a stateless single prompt).
 
 ## Next Task
-Build Module 1 (`src/stt.py`) for microphone input and Speech-to-Text transcription.
+Build Module 4 (`tools.py`): system commands / app launcher / web scraper, decoupled from `stt.py` and `tts.py`, callable from `brain.py`'s API-mode tool-use path.
 
 ## Next Prompt to Run
-"Read `3_HANDOFF.md` alongside our project rules. Let's write `src/stt.py` for Module 1 (Speech-to-Text). We want an async-friendly module using `faster-whisper` and `sounddevice` (or `pyaudio`) that records audio from the microphone when triggered and returns transcribed text. Keep it lightweight so it runs fast on CPU."
+"Following `CODING_RULES.md` and `ARCHITECTURE.md`, let's write `tools.py` for Module 4. It should expose async, decoupled functions for system commands (open an app, run a shell command safely, get system specs) that `brain.py` can invoke via tool calling in API mode. Keep error handling explicit and don't import `stt`/`tts` into it."
