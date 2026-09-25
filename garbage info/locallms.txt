@@ -1,0 +1,6 @@
+Qwen 2.5 Coder 1.5B
+Llama 3.2 1B Instruct
+DeepSeek-R1-Distill-Qwen-1.5B
+
+
+might upgrade to better ones after upgrading the pc

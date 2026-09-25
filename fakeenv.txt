@@ -1,0 +1,24 @@
+# Mode settings: 'api' or 'local'
+LLM_MODE=api
+
+# Free Google AI Studio Key
+GEMINI_API_KEY=apikey
+
+# no need for auto updates so skip network lookups once models are cached
+HF_HUB_OFFLINE=1
+
+# avoid the flaky Xet download backend
+HF_HUB_DISABLE_XET=1
+
+# whisper model -> stt translator
+WHISPER_MODEL_SIZE=base.en
+
+# Fast, local text-to-speech via Piper.
+TTS_ENGINE=piper
+PIPER_MODEL=models/piper/en_US-lessac-medium.onnx
+PIPER_LENGTH_SCALE=1.1
+PIPER_LEADING_SILENCE=0.18
+WHISPER_COMPUTE_TYPE=int8
+
+# mic device index: 2 = bluetooth earbuds (oraimo), 1 = built-in mic array (wired/no earbuds)
+STT_INPUT_DEVICE=2
