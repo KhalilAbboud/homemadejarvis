@@ -14,7 +14,7 @@
 
 ## Project Roadmap (Remaining Steps)
 1. **Step 4 (Next):** Build Module 4 (`tools.py`) — system commands, app launcher, web scraper, and wire tool-calling into `brain.py`'s API-mode path.
-2. **Step 5:** Add wake word (`wake_word.py`) — passive "Hey JARVIS" detection via `openwakeword`, gating `listen_and_transcribe()`.
+2. **Step 5:** Add wake word (`wake_word.py`) — passive "Hey OSIRIS" detection via `openwakeword`, gating `listen_and_transcribe()`.
 3. **Step 6:** Conversation memory — short-term chat history across turns in a voice session (currently each turn is a stateless single prompt).
 
 ## Next Task

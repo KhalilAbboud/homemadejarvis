@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger("jarvis.brain")
+logger = logging.getLogger("osiris.brain")
 
 LLM_MODE = os.getenv("LLM_MODE", "local").strip().lower()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -26,7 +26,7 @@ REQUEST_TIMEOUT = 30.0
 # speech-synthesis time, while still allowing a user to ask for more detail.
 VOICE_SYSTEM_PROMPT = os.getenv(
     "VOICE_SYSTEM_PROMPT",
-    "You are JARVIS, a helpful voice assistant. Reply in one or two concise "
+    "You are OSIRIS, a helpful voice assistant. Reply in one or two concise "
     "spoken sentences unless the user explicitly asks for detail. Do not use "
     "markdown, lists, or filler.",
 )

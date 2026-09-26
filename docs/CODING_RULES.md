@@ -1,4 +1,4 @@
-# JARVIS - Coding Rules & Style
+# OSIRIS - Coding Rules & Style
 
 - Language: Python 3.11+
 - Async First: Use `asyncio` for audio non-blocking streaming.

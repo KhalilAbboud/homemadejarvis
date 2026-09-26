@@ -1,7 +1,7 @@
-# JARVIS - System Architecture
+# OSIRIS - System Architecture
 
 ## Project Goal
-A modular, local/cloud hybrid AI assistant inspired by JARVIS capable of voice interaction and computer controls.
+A modular, local/cloud hybrid AI assistant inspired by OSIRIS capable of voice interaction and computer controls.
 
 ## Execution Modes (`LLM_MODE`)
 The system dynamically switches execution providers via a single environment variable (`LLM_MODE`):

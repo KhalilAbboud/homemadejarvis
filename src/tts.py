@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger("jarvis.tts")
+logger = logging.getLogger("osiris.tts")
 
 TTS_ENGINE = os.getenv("TTS_ENGINE", "piper").strip().lower()
 PIPER_MODEL = Path(os.getenv("PIPER_MODEL", "models/piper/en_US-lessac-low.onnx"))
@@ -74,7 +74,7 @@ def _speech_chunks(text: str) -> list[str]:
 
 
 def _cache_path(engine: str, voice: str, text: str, suffix: str) -> Path:
-    cache_dir = Path(tempfile.gettempdir()) / "jarvis_tts_cache"
+    cache_dir = Path(tempfile.gettempdir()) / "osiris_tts_cache"
     cache_dir.mkdir(exist_ok=True)
     digest = hashlib.sha256(f"{engine}|{voice}|{text}".encode()).hexdigest()
     return cache_dir / f"{digest}{suffix}"
@@ -203,4 +203,4 @@ async def speak(text: str) -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    asyncio.run(speak("Hello, I am JARVIS. Local Piper voice is working."))
+    asyncio.run(speak("Hello, I am OSIRIS. Local Piper voice is working."))

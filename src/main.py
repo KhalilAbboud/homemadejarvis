@@ -11,7 +11,7 @@ from stt import STTError, listen_and_transcribe, warm_up as warm_up_stt
 from tts import TTSError, speak, warm_up as warm_up_tts
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
-logger = logging.getLogger("jarvis.main")
+logger = logging.getLogger("osiris.main")
 
 EXIT_PHRASES = {"exit", "quit", "goodbye", "stop", "stop listening"}
 # Wait until a character follows punctuation. This prevents an arriving token
@@ -80,7 +80,7 @@ async def _stream_reply_to_speech(prompt: str) -> str:
 
 
 async def run() -> None:
-    print("JARVIS is online. Speak after 'Listening...'. Say 'exit' to quit.\n")
+    print("OSIRIS is online. Speak after 'Listening...'. Say 'exit' to quit.\n")
     asyncio.create_task(_warm_stt())
     asyncio.create_task(_warm_tts())
 
@@ -102,7 +102,7 @@ async def run() -> None:
                 logger.warning("[TTS] %s", e)
             break
 
-        print("JARVIS: ", end="", flush=True)
+        print("OSIRIS: ", end="", flush=True)
         try:
             await _stream_reply_to_speech(user_text)
         except LLMError as e:

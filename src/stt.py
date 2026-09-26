@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger("jarvis.stt")
+logger = logging.getLogger("osiris.stt")
 
 # --- Configuration -----------------------------------------------------
 
