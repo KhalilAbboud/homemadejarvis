@@ -27,7 +27,7 @@ logger = logging.getLogger("jarvis.stt")
 
 # --- Configuration -----------------------------------------------------
 
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 16000  # target rate Whisper receives; device may record at a different native rate
 CHANNELS = 1
 DTYPE = "float32"
 
@@ -82,6 +82,55 @@ async def warm_up() -> None:
 
 # --- Blocking recording (runs in a thread) ------------------------------
 
+# Candidates to probe, most-preferred first. SAMPLE_RATE first (skips
+# resampling entirely when it works); common Bluetooth HFP/telephony rates
+# next; device's own reported default last as a fallback.
+_CANDIDATE_RATES = (SAMPLE_RATE, 8000, 32000, 48000, 44100)
+
+
+def _resolve_input_samplerate(device) -> int:
+    """
+    Finds a sample rate this device will actually open. `default_samplerate`
+    from sd.query_devices() is NOT reliable here: Windows commonly reports a
+    generic driver default (e.g. 44100) for Bluetooth Hands-Free devices even
+    though the HFP codec only supports 8 kHz or 16 kHz. So probe candidate
+    rates with check_input_settings (validates without opening a real
+    stream) instead of trusting the reported metadata.
+    """
+    try:
+        info = sd.query_devices(device, "input")
+    except ValueError as e:
+        raise STTError(f"Configured STT_INPUT_DEVICE={device!r} is not an input device: {e}") from e
+
+    reported_default = int(info["default_samplerate"])
+    candidates = list(dict.fromkeys((*_CANDIDATE_RATES, reported_default)))  # dedupe, keep order
+
+    for rate in candidates:
+        try:
+            sd.check_input_settings(device=device, samplerate=rate, channels=CHANNELS, dtype=DTYPE)
+            return rate
+        except sd.PortAudioError:
+            continue
+
+    raise STTError(
+        f"Device {device!r} ('{info['name']}') did not accept any of the probed "
+        f"sample rates {candidates}. Try a different STT_INPUT_DEVICE / host API "
+        f"entry for the same physical device (see `python -m sounddevice`)."
+    )
+
+
+def _resample_to_target(audio: np.ndarray, source_rate: int) -> np.ndarray:
+    """Linear-interpolation resample to SAMPLE_RATE. No scipy dependency —
+    adequate for speech going into Whisper, which resamples internally anyway."""
+    if source_rate == SAMPLE_RATE or audio.size == 0:
+        return audio
+    duration = len(audio) / source_rate
+    n_target = max(1, int(round(duration * SAMPLE_RATE)))
+    source_x = np.linspace(0, duration, num=len(audio), endpoint=False)
+    target_x = np.linspace(0, duration, num=n_target, endpoint=False)
+    return np.interp(target_x, source_x, audio).astype(np.float32)
+
+
 def _trim_silence(audio: np.ndarray) -> np.ndarray:
     """Cuts leading silence and trims trailing silence to a short pad."""
     block = int(SAMPLE_RATE * 0.1)  # 100ms windows
@@ -113,8 +162,9 @@ def _record_blocking() -> np.ndarray:
     Bluetooth microphone for each chunk, but can stop after speech ends.
     Blocking — must be called via asyncio.to_thread.
     """
+    device_rate = _resolve_input_samplerate(STT_INPUT_DEVICE)
     try:
-        block_size = max(1, int(BLOCK_SECONDS * SAMPLE_RATE))
+        block_size = max(1, int(BLOCK_SECONDS * device_rate))
         start_limit = max(1, int(SPEECH_START_TIMEOUT / BLOCK_SECONDS))
         trailing_limit = max(1, int(TRAILING_PAD_SECONDS / BLOCK_SECONDS))
         max_blocks = max(1, int(MAX_RECORD_SECONDS / BLOCK_SECONDS))
@@ -122,7 +172,7 @@ def _record_blocking() -> np.ndarray:
         heard_speech = False
         quiet_blocks = 0
         with sd.InputStream(
-            samplerate=SAMPLE_RATE,
+            samplerate=device_rate,
             channels=CHANNELS,
             dtype=DTYPE,
             device=STT_INPUT_DEVICE,
@@ -146,12 +196,19 @@ def _record_blocking() -> np.ndarray:
                     break
     except sd.PortAudioError as e:
         raise STTError(
-            f"Microphone error: {e}. If you pinned STT_INPUT_DEVICE, "
-            f"confirm it supports {SAMPLE_RATE} Hz natively "
-            f"(check with `python -m sounddevice`)."
+            f"Microphone error: {e}. Reported native rate for this device is "
+            f"{device_rate} Hz — if the stream still won't open at that rate, "
+            f"the device/host API combination itself may not support capture "
+            f"(check with `python -m sounddevice` and try a different API entry "
+            f"for the same device)."
         ) from e
 
-    return _trim_silence(np.concatenate(blocks)) if blocks else np.array([], dtype=DTYPE)
+    if not blocks:
+        return np.array([], dtype=DTYPE)
+
+    audio = np.concatenate(blocks)
+    audio = _resample_to_target(audio, device_rate)
+    return _trim_silence(audio)
 
 
 # --- Public API ----------------------------------------------------------
