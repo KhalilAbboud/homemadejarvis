@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 
-from brain import LLMError, stream_llm_response
+from brain import LLMError, stream_llm_response, stream_project_plan
 from stt import STTError, listen_and_transcribe, warm_up as warm_up_stt
 from tts import TTSError, speak, warm_up as warm_up_tts
 
@@ -21,6 +21,13 @@ _SENTENCE_END = re.compile(r"^(.+?[.!?])\s+", re.DOTALL)
 
 def _is_exit_command(text: str) -> bool:
     return text.strip().lower().rstrip(".!?") in EXIT_PHRASES
+
+
+def _is_project_planning_request(text: str) -> bool:
+    """Route explicit project-planning requests to the deeper planner."""
+    normalized = text.lower()
+    triggers = ("project plan", "plan this project", "plan a project", "help me plan")
+    return any(trigger in normalized for trigger in triggers)
 
 
 def _pop_complete_sentence(buffer: str) -> tuple[str | None, str]:
@@ -45,7 +52,7 @@ async def _warm_tts() -> None:
         logger.warning("[TTS warm-up] %s", e)
 
 
-async def _stream_reply_to_speech(prompt: str) -> str:
+async def _stream_reply_to_speech(prompt: str, *, project_planning: bool = False) -> str:
     """Generate text and play each finished sentence while later text streams."""
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     reply_parts: list[str] = []
@@ -53,7 +60,8 @@ async def _stream_reply_to_speech(prompt: str) -> str:
     async def produce() -> None:
         buffer = ""
         try:
-            async for token in stream_llm_response(prompt):
+            response_stream = stream_project_plan(prompt) if project_planning else stream_llm_response(prompt)
+            async for token in response_stream:
                 reply_parts.append(token)
                 print(token, end="", flush=True)
                 buffer += token
@@ -104,7 +112,7 @@ async def run() -> None:
 
         print("OSIRIS: ", end="", flush=True)
         try:
-            await _stream_reply_to_speech(user_text)
+            await _stream_reply_to_speech(user_text, project_planning=_is_project_planning_request(user_text))
         except LLMError as e:
             logger.error("\n[Brain] %s", e)
             try:

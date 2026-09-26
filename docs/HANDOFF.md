@@ -13,12 +13,12 @@
 - End-to-end voice loop (listen → think → speak) is functional.
 
 ## Project Roadmap (Remaining Steps)
-1. **Step 4 (Next):** Build Module 4 (`tools.py`) — system commands, app launcher, web scraper, and wire tool-calling into `brain.py`'s API-mode path.
+1. **Step 4:** Module 4 is organized as `tools/apps.py`, `tools/system_info.py`, `tools/web.py`, and `tools/planner.py`. It omits arbitrary shell commands. `brain.stream_project_plan()` uses elevated API reasoning for detailed plans.
 2. **Step 5:** Add wake word (`wake_word.py`) — passive "Hey OSIRIS" detection via `openwakeword`, gating `listen_and_transcribe()`.
 3. **Step 6:** Conversation memory — short-term chat history across turns in a voice session (currently each turn is a stateless single prompt).
 
 ## Next Task
-Build Module 4 (`tools.py`): system commands / app launcher / web scraper, decoupled from `stt.py` and `tts.py`, callable from `brain.py`'s API-mode tool-use path.
+Wire Module 4's safe submodules into the provider's function-calling path.
 
 ## Next Prompt to Run
-"Following `CODING_RULES.md` and `ARCHITECTURE.md`, let's write `tools.py` for Module 4. It should expose async, decoupled functions for system commands (open an app, run a shell command safely, get system specs) that `brain.py` can invoke via tool calling in API mode. Keep error handling explicit and don't import `stt`/`tts` into it."
+"Wire Module 4's safe submodules into Gemini function calling. Preserve the app allowlist, SSRF protections for web tools, and the absence of any shell-command function."

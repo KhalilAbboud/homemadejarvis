@@ -15,7 +15,9 @@ The system dynamically switches execution providers via a single environment var
    - **Local Engine:** HTTP client connecting to `http://localhost:11434/api/generate` (Ollama).
    - **API Engine:** Official SDK client (e.g., `anthropic` or `openai` Python package).
 3. **Module 3 (Voice Out):** TTS (Text-to-Speech) using Kokoro or Piper.
-4. **Module 4 (Tools):** System commands, app launcher, web scraper.
+4. **Module 4 (Tools):** Safe, focused submodules for allowlisted app launching,
+   read-only system specifications, public-web search/page retrieval, and detailed
+   project planning. It intentionally has no arbitrary shell-command capability.
 
 ## Active Focus
 Building Module 2 (Brain) with dual-mode support (`local` vs `api`).

@@ -21,6 +21,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 REQUEST_TIMEOUT = 30.0
+PROJECT_PLANNING_THINKING_LEVEL = os.getenv("PROJECT_PLANNING_THINKING_LEVEL", "high")
 
 # Spoken responses should be short. This reduces both model generation and
 # speech-synthesis time, while still allowing a user to ask for more detail.
@@ -65,7 +66,7 @@ async def _stream_local_response(prompt: str) -> AsyncIterator[str]:
         raise LLMError(f"Ollama returned invalid stream data: {e}") from e
 
 
-async def _stream_api_response(prompt: str) -> AsyncIterator[str]:
+async def _stream_api_response(prompt: str, *, thinking_level: str = "low") -> AsyncIterator[str]:
     if not GEMINI_API_KEY:
         raise LLMError("GEMINI_API_KEY is not set in the environment/.env file.")
     try:
@@ -80,7 +81,7 @@ async def _stream_api_response(prompt: str) -> AsyncIterator[str]:
             contents=prompt,
             config={
                 "system_instruction": VOICE_SYSTEM_PROMPT,
-                "thinking_config": {"thinking_level": "low"},
+                "thinking_config": {"thinking_level": thinking_level},
             },
         )
         async for response in stream:
@@ -110,6 +111,22 @@ async def stream_llm_response(prompt: str) -> AsyncIterator[str]:
 async def get_llm_response(prompt: str) -> str:
     """Compatibility helper that collects a full streamed response."""
     return "".join([text async for text in stream_llm_response(prompt)]).strip()
+
+
+async def stream_project_plan(project: str, *, context: str = "", constraints: str = "") -> AsyncIterator[str]:
+    """Stream a detailed project plan, using elevated API reasoning when available."""
+    from tools.planner import PROJECT_PLANNING_PROMPT, build_project_planning_prompt
+
+    project_prompt = build_project_planning_prompt(project, context=context, constraints=constraints)
+    prompt = f"{PROJECT_PLANNING_PROMPT}\n\n{project_prompt}"
+    if LLM_MODE == "api":
+        async for text in _stream_api_response(prompt, thinking_level=PROJECT_PLANNING_THINKING_LEVEL):
+            yield text
+    elif LLM_MODE == "local":
+        async for text in _stream_local_response(prompt):
+            yield text
+    else:
+        raise LLMError(f"Unknown LLM_MODE='{LLM_MODE}'. Use 'local' or 'api'.")
 
 
 if __name__ == "__main__":
