@@ -4,23 +4,56 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 
 from brain import LLMError, stream_llm_response, stream_project_plan
 from stt import STTError, listen_and_transcribe, warm_up as warm_up_stt
 from tts import TTSError, speak, warm_up as warm_up_tts
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+# Libraries log their own diagnostics at INFO level (the google-genai SDK, for
+# example, prints "AFC is enabled with max remote calls: 10." on every streamed
+# call). Because the root logger is at INFO with a bare "%(message)s" format,
+# that output lands in the middle of the console transcript looking like part
+# of OSIRIS's reply. Keep third-party chatter at WARNING or above; OSIRIS's own
+# modules keep the configured level.
+_NOISY_LIBRARY_LOGGERS = ("google_genai", "httpx", "httpcore", "urllib3")
+
+
+def _configure_logging() -> None:
+    level = getattr(logging, os.getenv("OSIRIS_LOG_LEVEL", "INFO").strip().upper(), logging.INFO)
+    logging.basicConfig(level=level, format="%(message)s")
+    for name in _NOISY_LIBRARY_LOGGERS:
+        logging.getLogger(name).setLevel(max(level, logging.WARNING))
+
+
+_configure_logging()
 logger = logging.getLogger("osiris.main")
 
 EXIT_PHRASES = {"exit", "quit", "goodbye", "stop", "stop listening"}
+# An exit phrase spoken at the end of a short utterance still means "stop"
+# ("and stop", "okay, stop listening"), but a negated or question form must not
+# ("don't stop", "should I stop?").
+_NEGATION_RE = re.compile(r"\b(?:don't|do not|dont|never|can't|cannot|won't|will not)\b")
+_MAX_EXIT_UTTERANCE_WORDS = 5
 # Wait until a character follows punctuation. This prevents an arriving token
 # such as "3." or an abbreviation from being spoken as a finished sentence.
 _SENTENCE_END = re.compile(r"^(.+?[.!?])\s+", re.DOTALL)
 
 
 def _is_exit_command(text: str) -> bool:
-    return text.strip().lower().rstrip(".!?") in EXIT_PHRASES
+    normalized = text.strip().lower().rstrip(".!?").strip()
+    if not normalized:
+        return False
+    if normalized in EXIT_PHRASES:
+        return True
+    if "?" in text or _NEGATION_RE.search(normalized):
+        return False
+    words = normalized.replace(",", " ").split()
+    if len(words) > _MAX_EXIT_UTTERANCE_WORDS:
+        return False
+    trailing = " ".join(words[-2:])
+    return words[-1] in EXIT_PHRASES or trailing in EXIT_PHRASES
 
 
 def _is_project_planning_request(text: str) -> bool:

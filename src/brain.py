@@ -15,6 +15,12 @@ load_dotenv()
 
 logger = logging.getLogger("osiris.brain")
 
+# The google-genai SDK logs INFO-level diagnostics on every call ("AFC is
+# enabled with max remote calls: 10.", "AFC remote call 1 is done.") that would
+# otherwise appear in OSIRIS's console transcript. Quiet them here too so
+# running this module standalone stays clean.
+logging.getLogger("google_genai").setLevel(logging.WARNING)
+
 LLM_MODE = os.getenv("LLM_MODE", "local").strip().lower()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:1.5b")

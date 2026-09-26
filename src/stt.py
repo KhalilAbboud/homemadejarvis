@@ -11,9 +11,11 @@ Decoupling: this module knows nothing about the brain (Module 2), TTS
 from __future__ import annotations
 
 import os
+import re
 import asyncio
 import logging
 import threading
+from collections import Counter
 from typing import Optional
 
 import numpy as np
@@ -40,6 +42,19 @@ SILENCE_THRESHOLD = float(os.getenv("STT_SILENCE_THRESHOLD", "0.004"))  # RMS
 TRAILING_PAD_SECONDS = float(os.getenv("STT_TRAILING_PAD", "0.4"))
 SPEECH_START_TIMEOUT = float(os.getenv("STT_START_TIMEOUT", "5"))
 BLOCK_SECONDS = float(os.getenv("STT_BLOCK_SECONDS", "0.1"))
+
+# Transcription guards. Whisper "hallucinates" plausible-sounding text when it
+# is handed near-silence or a too-short/noisy capture (e.g. looping "a little
+# bit of a little bit of ..." forever). VAD plus these thresholds make the
+# model return nothing instead of inventing speech, and the filter further down
+# drops any loop that still gets through.
+MIN_SPEECH_SECONDS = float(os.getenv("STT_MIN_SPEECH_SECONDS", "0.3"))
+VAD_MIN_SILENCE_MS = int(os.getenv("STT_VAD_MIN_SILENCE_MS", "500"))
+NO_SPEECH_THRESHOLD = float(os.getenv("STT_NO_SPEECH_THRESHOLD", "0.6"))
+LOG_PROB_THRESHOLD = float(os.getenv("STT_LOG_PROB_THRESHOLD", "-1.0"))
+COMPRESSION_RATIO_THRESHOLD = float(os.getenv("STT_COMPRESSION_RATIO_THRESHOLD", "2.4"))
+REPETITION_PENALTY = float(os.getenv("STT_REPETITION_PENALTY", "1.1"))
+NO_REPEAT_NGRAM_SIZE = int(os.getenv("STT_NO_REPEAT_NGRAM_SIZE", "3"))
 
 # Optional: pin a specific input device if the system default is wrong.
 # NOTE: the device must support SAMPLE_RATE natively (sd.rec() does not
@@ -211,11 +226,84 @@ def _record_blocking() -> np.ndarray:
     return _trim_silence(audio)
 
 
+# --- Transcript sanity filter --------------------------------------------
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+# Heuristics for spotting a Whisper repetition loop.
+MIN_REPEATED_WORDS = 8        # below this a transcript is too short to judge
+REPEAT_MIN_OCCURRENCES = 3    # an n-gram must repeat this often to count
+MOST_COMMON_WORD_RATIO = 0.4  # one word dominating the text means a loop
+
+# Whisper artifacts produced when it decodes silence/noise instead of speech.
+# These are media credits and filler, never a real command in this voice loop.
+_HALLUCINATION_ARTIFACTS = frozenset(
+    {
+        "you",
+        "thank you for watching",
+        "thanks for watching",
+        "thank you for watching the video",
+        "please subscribe",
+        "subscribe to my channel",
+        "subtitles by",
+        "transcription by",
+        "amara.org",
+        "www.mooji.org",
+    }
+)
+
+
+def _looks_like_hallucination(text: str) -> bool:
+    """True for the known silence artifacts Whisper emits on empty input."""
+    collapsed = " ".join(_WORD_RE.findall(text.lower()))
+    return not collapsed or collapsed in _HALLUCINATION_ARTIFACTS
+
+
+def _is_repetition_loop(text: str) -> bool:
+    """
+    True when a transcript is mostly one word or n-gram repeated, e.g.
+    "I'm going to go ahead and get a little bit of a little bit of ...".
+    Whisper emits these when the capture is too quiet/short to decode, so they
+    are never genuine input.
+    """
+    words = _WORD_RE.findall(text.lower())
+    if len(words) < MIN_REPEATED_WORDS:
+        return False
+
+    dominant_ratio = Counter(words).most_common(1)[0][1] / len(words)
+    if dominant_ratio >= MOST_COMMON_WORD_RATIO:
+        return True
+
+    for size in range(2, 6):
+        if len(words) < size * REPEAT_MIN_OCCURRENCES:
+            continue
+        ngrams = Counter(tuple(words[i:i + size]) for i in range(len(words) - size + 1))
+        occurrences = ngrams.most_common(1)[0][1]
+        if occurrences >= REPEAT_MIN_OCCURRENCES and occurrences * size / len(words) >= 0.5:
+            return True
+    return False
+
+
+def _clean_transcript(text: str) -> str:
+    """Drop hallucinations and repetition loops; return "" when unusable."""
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    if _looks_like_hallucination(cleaned):
+        logger.info("Ignoring likely Whisper silence artifact: %r", cleaned)
+        return ""
+    if _is_repetition_loop(cleaned):
+        logger.info("Ignoring Whisper repetition loop (%d characters).", len(cleaned))
+        return ""
+    return cleaned
+
+
 # --- Public API ----------------------------------------------------------
 
 async def listen_and_transcribe() -> str:
     """
     Records from the microphone and returns the transcribed text.
+    Returns "" when the capture contained no usable speech.
     Raises STTError on microphone or transcription failure.
     """
     audio = await asyncio.to_thread(_record_blocking)
@@ -224,6 +312,15 @@ async def listen_and_transcribe() -> str:
         raise STTError(
             f"No speech detected in {SPEECH_START_TIMEOUT}s "
             f"(RMS never exceeded {SILENCE_THRESHOLD})."
+        )
+
+    duration = audio.size / SAMPLE_RATE
+    if duration < MIN_SPEECH_SECONDS:
+        # Transcribing a sub-300ms capture is what makes Whisper hallucinate;
+        # treat it as silence instead of guessing at words.
+        raise STTError(
+            f"Capture was only {duration:.2f}s (minimum {MIN_SPEECH_SECONDS}s); "
+            f"treated as no speech."
         )
 
     logger.info("Recording captured, transcribing (model load is slow on first run)...")
@@ -239,10 +336,21 @@ async def listen_and_transcribe() -> str:
                 temperature=0.0,
                 condition_on_previous_text=False,
                 word_timestamps=False,
+                # Drop non-speech regions and refuse low-confidence text so
+                # silence comes back empty rather than invented.
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": VAD_MIN_SILENCE_MS, "speech_pad_ms": 100},
+                no_speech_threshold=NO_SPEECH_THRESHOLD,
+                log_prob_threshold=LOG_PROB_THRESHOLD,
+                compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
+                # Discourage the decode loop that repeats one phrase forever.
+                repetition_penalty=REPETITION_PENALTY,
+                no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
             )
-            return " ".join(seg.text.strip() for seg in segments).strip()
+            raw = " ".join(seg.text.strip() for seg in segments).strip()
         except Exception as e:
             raise STTError(f"Transcription failed: {e}") from e
+        return _clean_transcript(raw)
 
     return await asyncio.to_thread(_transcribe)
 
