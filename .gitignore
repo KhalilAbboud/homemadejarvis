@@ -1,3 +1,5 @@
 models/
 .sixth/
 .vscode/
+.env
+src/__pycache__/

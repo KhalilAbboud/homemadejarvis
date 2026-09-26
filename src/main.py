@@ -63,6 +63,13 @@ def _is_project_planning_request(text: str) -> bool:
     return any(trigger in normalized for trigger in triggers)
 
 
+def _is_project_planning_request(text: str) -> bool:
+    """Route explicit project-planning requests to the deeper planner."""
+    normalized = text.lower()
+    triggers = ("project plan", "plan this project", "plan a project", "help me plan")
+    return any(trigger in normalized for trigger in triggers)
+
+
 def _pop_complete_sentence(buffer: str) -> tuple[str | None, str]:
     """Return one finished sentence and leave the unfinished text buffered."""
     match = _SENTENCE_END.match(buffer)
