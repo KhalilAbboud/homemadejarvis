@@ -3,3 +3,5 @@ models/
 .vscode/
 .env
 src/__pycache__/
+docs/
+garbage info/
