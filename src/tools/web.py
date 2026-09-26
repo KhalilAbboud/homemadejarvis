@@ -132,9 +132,16 @@ async def search_web(query: str, max_results: int = 5) -> list[SearchResult]:
         raise ValueError("max_results must be between 1 and 10")
     _url, body = await _download(f"https://html.duckduckgo.com/html/?q={quote_plus(query.strip())}")
 
+    # DuckDuckGo's HTML endpoint emits one result__a (title+link) followed by
+    # one result__snippet per result, in the same order. They're extracted
+    # separately (different tag structure) and paired positionally rather
+    # than with one combined regex, which would be fragile against the
+    # snippet's own nested <b>/<a> tags.
+    raw_snippets = re.findall(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', body, flags=re.DOTALL)
+
     results: list[SearchResult] = []
-    for raw_link, raw_title in re.findall(
-        r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', body, flags=re.DOTALL
+    for index, (raw_link, raw_title) in enumerate(
+        re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', body, flags=re.DOTALL)
     ):
         link = html.unescape(raw_link)
         if "uddg=" in link:
@@ -142,8 +149,12 @@ async def search_web(query: str, max_results: int = 5) -> list[SearchResult]:
         if urlparse(link).scheme not in {"http", "https"}:
             continue
         title = html.unescape(re.sub("<[^>]+>", "", raw_title)).strip()
-        if title:
-            results.append(SearchResult(title=title, url=link, snippet=""))
+        if not title:
+            continue
+        snippet = ""
+        if index < len(raw_snippets):
+            snippet = html.unescape(re.sub("<[^>]+>", "", raw_snippets[index])).strip()
+        results.append(SearchResult(title=title, url=link, snippet=snippet))
         if len(results) >= max_results:
             break
     return results

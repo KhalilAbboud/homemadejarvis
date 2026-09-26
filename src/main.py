@@ -7,9 +7,14 @@ import logging
 import os
 import re
 
-from brain import LLMError, stream_llm_response, stream_project_plan
+from brain import LLMError, stream_llm_response
 from stt import STTError, listen_and_transcribe, warm_up as warm_up_stt
 from tts import TTSError, speak, warm_up as warm_up_tts
+
+# The orchestrator is the one module allowed to know about every other
+# module (brain, stt, tts, tools) — it's the composition root. Individual
+# modules never import each other directly; see CODING_RULES.md.
+from tools.planner import PROJECT_PLANNING_PROMPT, build_project_planning_prompt
 
 # Libraries log their own diagnostics at INFO level (the google-genai SDK, for
 # example, prints "AFC is enabled with max remote calls: 10." on every streamed
@@ -18,6 +23,13 @@ from tts import TTSError, speak, warm_up as warm_up_tts
 # of OSIRIS's reply. Keep third-party chatter at WARNING or above; OSIRIS's own
 # modules keep the configured level.
 _NOISY_LIBRARY_LOGGERS = ("google_genai", "httpx", "httpcore", "urllib3")
+
+PROJECT_PLANNING_THINKING_LEVEL = os.getenv("PROJECT_PLANNING_THINKING_LEVEL", "high")
+# Project plans are long, structured, markdown-ish output (headings, bullet
+# milestones, etc). Piping that through the sentence-splitter into TTS would
+# have OSIRIS attempt to speak "1. Objective:" and bullet dashes aloud. Instead
+# the full plan is printed/logged and OSIRIS speaks a short spoken notice only.
+PROJECT_PLAN_SPOKEN_NOTICE = "I've put together the plan — check your screen for the full write-up."
 
 
 def _configure_logging() -> None:
@@ -40,6 +52,8 @@ _MAX_EXIT_UTTERANCE_WORDS = 5
 # such as "3." or an abbreviation from being spoken as a finished sentence.
 _SENTENCE_END = re.compile(r"^(.+?[.!?])\s+", re.DOTALL)
 
+_PROJECT_PLANNING_TRIGGERS = ("project plan", "plan this project", "plan a project", "help me plan")
+
 
 def _is_exit_command(text: str) -> bool:
     normalized = text.strip().lower().rstrip(".!?").strip()
@@ -59,15 +73,7 @@ def _is_exit_command(text: str) -> bool:
 def _is_project_planning_request(text: str) -> bool:
     """Route explicit project-planning requests to the deeper planner."""
     normalized = text.lower()
-    triggers = ("project plan", "plan this project", "plan a project", "help me plan")
-    return any(trigger in normalized for trigger in triggers)
-
-
-def _is_project_planning_request(text: str) -> bool:
-    """Route explicit project-planning requests to the deeper planner."""
-    normalized = text.lower()
-    triggers = ("project plan", "plan this project", "plan a project", "help me plan")
-    return any(trigger in normalized for trigger in triggers)
+    return any(trigger in normalized for trigger in _PROJECT_PLANNING_TRIGGERS)
 
 
 def _pop_complete_sentence(buffer: str) -> tuple[str | None, str]:
@@ -92,7 +98,7 @@ async def _warm_tts() -> None:
         logger.warning("[TTS warm-up] %s", e)
 
 
-async def _stream_reply_to_speech(prompt: str, *, project_planning: bool = False) -> str:
+async def _stream_reply_to_speech(prompt: str) -> str:
     """Generate text and play each finished sentence while later text streams."""
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     reply_parts: list[str] = []
@@ -100,8 +106,7 @@ async def _stream_reply_to_speech(prompt: str, *, project_planning: bool = False
     async def produce() -> None:
         buffer = ""
         try:
-            response_stream = stream_project_plan(prompt) if project_planning else stream_llm_response(prompt)
-            async for token in response_stream:
+            async for token in stream_llm_response(prompt):
                 reply_parts.append(token)
                 print(token, end="", flush=True)
                 buffer += token
@@ -124,6 +129,26 @@ async def _stream_reply_to_speech(prompt: str, *, project_planning: bool = False
 
     await asyncio.gather(produce(), consume())
     print()
+    return "".join(reply_parts).strip()
+
+
+async def _stream_plan_to_console(user_text: str) -> str:
+    """
+    Generate a project plan and print it in full, without routing it through
+    TTS sentence-by-sentence (see PROJECT_PLAN_SPOKEN_NOTICE above). Speaks one
+    short notice once the plan has finished printing.
+    """
+    prompt = build_project_planning_prompt(user_text)
+    reply_parts: list[str] = []
+    async for token in stream_llm_response(
+        prompt,
+        system_prompt=PROJECT_PLANNING_PROMPT,
+        thinking_level=PROJECT_PLANNING_THINKING_LEVEL,
+    ):
+        reply_parts.append(token)
+        print(token, end="", flush=True)
+    print()
+    await speak(PROJECT_PLAN_SPOKEN_NOTICE)
     return "".join(reply_parts).strip()
 
 
@@ -152,7 +177,10 @@ async def run() -> None:
 
         print("OSIRIS: ", end="", flush=True)
         try:
-            await _stream_reply_to_speech(user_text, project_planning=_is_project_planning_request(user_text))
+            if _is_project_planning_request(user_text):
+                await _stream_plan_to_console(user_text)
+            else:
+                await _stream_reply_to_speech(user_text)
         except LLMError as e:
             logger.error("\n[Brain] %s", e)
             try:

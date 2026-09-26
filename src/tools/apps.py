@@ -29,10 +29,17 @@ class AppLaunchResult:
 
 
 def _configured_apps() -> dict[str, str]:
-    """Read a user-controlled app allowlist from ``OSIRIS_APP_PATHS`` JSON."""
+    """
+    Return the app allowlist: built-in defaults, overridden/extended by
+    ``OSIRIS_APP_PATHS`` JSON. This merges rather than replaces — setting one
+    custom app in OSIRIS_APP_PATHS must not silently remove calculator,
+    notepad, and settings. To remove a default, override its name with a
+    different target rather than omitting it (omission has no effect).
+    """
+    apps = dict(_DEFAULT_APPS)
     raw = os.getenv("OSIRIS_APP_PATHS", "").strip()
     if not raw:
-        return dict(_DEFAULT_APPS)
+        return apps
     try:
         configured = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -40,7 +47,6 @@ def _configured_apps() -> dict[str, str]:
     if not isinstance(configured, dict):
         raise AppError("OSIRIS_APP_PATHS must be a JSON object of app names to paths.")
 
-    apps: dict[str, str] = {}
     for name, target in configured.items():
         normalized = str(name).strip().lower()
         if not _APP_NAME.fullmatch(normalized) or not isinstance(target, str) or not target.strip():
