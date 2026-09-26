@@ -15,6 +15,7 @@ from tts import TTSError, speak, warm_up as warm_up_tts
 # module (brain, stt, tts, tools) — it's the composition root. Individual
 # modules never import each other directly; see CODING_RULES.md.
 from tools.planner import PROJECT_PLANNING_PROMPT, build_project_planning_prompt
+from tools.schemas import TOOL_ANNOUNCEMENTS, TOOL_DECLARATIONS, TOOL_DISPATCH
 
 # Libraries log their own diagnostics at INFO level (the google-genai SDK, for
 # example, prints "AFC is enabled with max remote calls: 10." on every streamed
@@ -99,14 +100,29 @@ async def _warm_tts() -> None:
 
 
 async def _stream_reply_to_speech(prompt: str) -> str:
-    """Generate text and play each finished sentence while later text streams."""
+    """
+    Generate text and play each finished sentence while later text streams.
+
+    Normal replies stream token-by-token with no change in behavior. When the
+    model calls a tool, brain.py yields a short spoken announcement (e.g.
+    "Opening notepad.") the moment it decides to call the tool, before the
+    tool actually runs — that announcement flows through this same sentence
+    buffer and gets spoken immediately, so the round-trip latency of the tool
+    call (and the follow-up Gemini call once results are back) happens during
+    or after that announcement instead of as silent dead air.
+    """
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     reply_parts: list[str] = []
 
     async def produce() -> None:
         buffer = ""
         try:
-            async for token in stream_llm_response(prompt):
+            async for token in stream_llm_response(
+                prompt,
+                tools=TOOL_DECLARATIONS,
+                tool_dispatch=TOOL_DISPATCH,
+                tool_announcements=TOOL_ANNOUNCEMENTS,
+            ):
                 reply_parts.append(token)
                 print(token, end="", flush=True)
                 buffer += token
