@@ -66,17 +66,25 @@ ToolAnnouncements = dict[str, Callable[[dict[str, Any]], str]]
 #  Keywords / patterns that suggest the prompt needs the smarter (but slower)
 #  model. All comparisons are case-insensitive.
 _COMPLEX_KEYWORDS = {
+    # reasoning / analytical
     "explain", "why", "how", "compare", "contrast", "analyze", "analyse",
-    "summarize", "summarise", "plan", "design", "debug", "refactor",
-    "implement", "write", "code", "create", "build", "step by step",
+    "summarize", "summarise", "evaluate", "reason", "think", "opinion",
+    # creative / generative
+    "plan", "design", "debug", "refactor", "implement", "write", "code",
+    "create", "build", "generate", "draft", "compose",
+    # research / depth
+    "research", "report", "scientific", "data", "study", "investigate",
+    "in-depth", "in depth", "detailed", "detail", "elaborate", "thorough",
+    # instructional
+    "teach", "tutorial", "guide", "step by step", "walk me through",
+    # comparative / advisory
     "pros and cons", "trade-off", "tradeoff", "difference between",
-    "what if", "describe", "elaborate", "detail", "think", "reason",
-    "evaluate", "recommend", "suggest", "opinion", "list",
+    "recommend", "suggest", "describe", "what if", "list",
 }
 # Minimum word count that tips towards the smart model on its own.
 _SMART_WORD_THRESHOLD = 18
 # Score at or above this → smart model.
-_SMART_SCORE_THRESHOLD = 2
+_SMART_SCORE_THRESHOLD = 1
 
 
 def _pick_local_model(prompt: str) -> str:
@@ -91,6 +99,13 @@ def _pick_local_model(prompt: str) -> str:
     lowered = prompt.lower()
     words = lowered.split()
     score = 0
+
+    # Very short utterances (greetings, one-liners) are never complex enough
+    # to justify the smarter model, even if they contain a stray keyword like
+    # "how" — "how are you?" vs "how does attention work in transformers?".
+    if len(words) <= 5:
+        logger.info("[local-router] score=0 (short-prompt fast-path) → %s", OLLAMA_MODEL_FAST)
+        return OLLAMA_MODEL_FAST
 
     # Long prompts are usually complex.
     if len(words) >= _SMART_WORD_THRESHOLD:
@@ -107,6 +122,7 @@ def _pick_local_model(prompt: str) -> str:
     if sentence_enders >= 2:
         score += 1
 
+
     chosen = OLLAMA_MODEL_SMART if score >= _SMART_SCORE_THRESHOLD else OLLAMA_MODEL_FAST
     logger.info("[local-router] score=%d → %s", score, chosen)
     return chosen
@@ -116,14 +132,20 @@ class LLMError(Exception):
     """Raised when the selected provider cannot produce a response."""
 
 
+# Module-level flag so the local-mode tool-calling warning only fires once.
+_local_tool_warning_shown = False
+
+
 async def _stream_local_response(prompt: str, *, system_prompt: str, tools: list[dict] | None) -> AsyncIterator[str]:
-    if tools:
+    global _local_tool_warning_shown
+    if tools and not _local_tool_warning_shown:
         # Raw Ollama /api/generate has no native function-calling API the way
         # Gemini does. Rather than hand-roll a prompt-based JSON tool-call
         # protocol (unreliable at 1.5B params, real work), local mode simply
         # answers without tools. Loud enough to notice, not an exception —
         # normal chat must keep working in local mode.
         logger.warning("Tool-calling requested but LLM_MODE=local has no tool support; answering without tools.")
+        _local_tool_warning_shown = True
 
     model = _pick_local_model(prompt)
     url = f"{OLLAMA_HOST}/api/generate"
