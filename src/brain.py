@@ -24,7 +24,11 @@ logging.getLogger("google_genai").setLevel(logging.WARNING)
 
 LLM_MODE = os.getenv("LLM_MODE", "local").strip().lower()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
+# Two-tier local model setup: FAST for snappy chitchat, SMART for reasoning.
+OLLAMA_MODEL_FAST = os.getenv("OLLAMA_MODEL_FAST", "smollm2:1.7b-instruct-q4_0")
+OLLAMA_MODEL_SMART = os.getenv("OLLAMA_MODEL_SMART", "qwen3.5:4b")
+# Legacy fallback — still honoured if someone sets it explicitly.
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 REQUEST_TIMEOUT = 30.0
@@ -56,6 +60,58 @@ ToolDispatch = dict[str, Callable[..., Awaitable[dict[str, Any]]]]
 ToolAnnouncements = dict[str, Callable[[dict[str, Any]], str]]
 
 
+# ---------------------------------------------------------------------------
+#  Local-model auto-routing heuristic
+# ---------------------------------------------------------------------------
+#  Keywords / patterns that suggest the prompt needs the smarter (but slower)
+#  model. All comparisons are case-insensitive.
+_COMPLEX_KEYWORDS = {
+    "explain", "why", "how", "compare", "contrast", "analyze", "analyse",
+    "summarize", "summarise", "plan", "design", "debug", "refactor",
+    "implement", "write", "code", "create", "build", "step by step",
+    "pros and cons", "trade-off", "tradeoff", "difference between",
+    "what if", "describe", "elaborate", "detail", "think", "reason",
+    "evaluate", "recommend", "suggest", "opinion", "list",
+}
+# Minimum word count that tips towards the smart model on its own.
+_SMART_WORD_THRESHOLD = 18
+# Score at or above this → smart model.
+_SMART_SCORE_THRESHOLD = 2
+
+
+def _pick_local_model(prompt: str) -> str:
+    """Choose between the fast and smart Ollama models.
+
+    Returns the model tag string.  If the legacy OLLAMA_MODEL env-var is set,
+    it always wins (backward-compat).
+    """
+    if OLLAMA_MODEL:
+        return OLLAMA_MODEL
+
+    lowered = prompt.lower()
+    words = lowered.split()
+    score = 0
+
+    # Long prompts are usually complex.
+    if len(words) >= _SMART_WORD_THRESHOLD:
+        score += 2
+
+    # Presence of complexity keywords.
+    for kw in _COMPLEX_KEYWORDS:
+        if kw in lowered:
+            score += 1
+            break  # one hit is enough; avoid double-counting near-synonyms
+
+    # Multiple sentences hint at a richer request.
+    sentence_enders = sum(1 for ch in prompt if ch in ".!?")
+    if sentence_enders >= 2:
+        score += 1
+
+    chosen = OLLAMA_MODEL_SMART if score >= _SMART_SCORE_THRESHOLD else OLLAMA_MODEL_FAST
+    logger.info("[local-router] score=%d → %s", score, chosen)
+    return chosen
+
+
 class LLMError(Exception):
     """Raised when the selected provider cannot produce a response."""
 
@@ -69,9 +125,10 @@ async def _stream_local_response(prompt: str, *, system_prompt: str, tools: list
         # normal chat must keep working in local mode.
         logger.warning("Tool-calling requested but LLM_MODE=local has no tool support; answering without tools.")
 
+    model = _pick_local_model(prompt)
     url = f"{OLLAMA_HOST}/api/generate"
     payload = {
-        "model": OLLAMA_MODEL,
+        "model": model,
         "prompt": prompt,
         "system": system_prompt,
         "stream": True,
