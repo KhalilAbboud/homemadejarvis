@@ -24,9 +24,9 @@ logging.getLogger("google_genai").setLevel(logging.WARNING)
 
 LLM_MODE = os.getenv("LLM_MODE", "local").strip().lower()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-# Two-tier local model setup: FAST for snappy chitchat, SMART for reasoning.
+# Two-tier local model setup: FAST for snappy chitchat, SMART for general reasoning.
 OLLAMA_MODEL_FAST = os.getenv("OLLAMA_MODEL_FAST", "smollm2:1.7b-instruct-q4_0")
-OLLAMA_MODEL_SMART = os.getenv("OLLAMA_MODEL_SMART", "qwen3.5:4b")
+OLLAMA_MODEL_SMART = os.getenv("OLLAMA_MODEL_SMART", "llama3.2:1b")
 # Legacy fallback — still honoured if someone sets it explicitly.
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
@@ -61,10 +61,27 @@ ToolAnnouncements = dict[str, Callable[[dict[str, Any]], str]]
 
 
 # ---------------------------------------------------------------------------
-#  Local-model auto-routing heuristic
+#  Hybrid & Local Model Routing
 # ---------------------------------------------------------------------------
-#  Keywords / patterns that suggest the prompt needs the smarter (but slower)
-#  model. All comparisons are case-insensitive.
+
+# Keywords specifically indicating in-depth research, reporting, or data analysis.
+# When LLM_MODE=local, queries matching these are routed to the cloud API
+# (Gemini) so your local machine doesn't choke on intensive research generation.
+_RESEARCH_KEYWORDS = {
+    "research", "report", "scientific", "study", "investigate",
+    "in-depth", "in depth", "detailed", "elaborate", "thorough",
+    "whitepaper", "literature review", "full paper", "comprehensive analysis",
+}
+
+
+def _is_research_request(prompt: str) -> bool:
+    """Return True if prompt relates to in-depth research or reports."""
+    lowered = prompt.lower()
+    return any(kw in lowered for kw in _RESEARCH_KEYWORDS)
+
+
+# Keywords for general complex prompts (logic, code, explanations, etc.)
+# routed locally to OLLAMA_MODEL_SMART (llama3.2:1b).
 _COMPLEX_KEYWORDS = {
     # reasoning / analytical
     "explain", "why", "how", "compare", "contrast", "analyze", "analyse",
@@ -72,9 +89,6 @@ _COMPLEX_KEYWORDS = {
     # creative / generative
     "plan", "design", "debug", "refactor", "implement", "write", "code",
     "create", "build", "generate", "draft", "compose",
-    # research / depth
-    "research", "report", "scientific", "data", "study", "investigate",
-    "in-depth", "in depth", "detailed", "detail", "elaborate", "thorough",
     # instructional
     "teach", "tutorial", "guide", "step by step", "walk me through",
     # comparative / advisory
@@ -286,6 +300,22 @@ async def stream_llm_response(
     """
     if not prompt or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
+
+    # Hybrid routing: if local mode is set but the user asks for in-depth research,
+    # offload to cloud API (Gemini) if GEMINI_API_KEY is available.
+    if LLM_MODE == "local" and _is_research_request(prompt) and GEMINI_API_KEY:
+        logger.info("[router] Research query detected -> hybrid offload to Gemini API")
+        async for text in _stream_api_response(
+            prompt,
+            system_prompt=system_prompt,
+            thinking_level=thinking_level,
+            tools=tools,
+            tool_dispatch=tool_dispatch,
+            tool_announcements=tool_announcements,
+        ):
+            yield text
+        return
+
     if LLM_MODE == "local":
         async for text in _stream_local_response(prompt, system_prompt=system_prompt, tools=tools):
             yield text

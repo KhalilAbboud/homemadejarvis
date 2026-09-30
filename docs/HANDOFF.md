@@ -1,7 +1,9 @@
 # Session Handoff State
 
 ## Last Completed Task
-- Module 2 (`brain.py`): dual-mode LLM router (`local` via Ollama, `api` via Gemini `google-genai` SDK), async streaming, error handling. **Local mode now auto-routes between two Ollama models** based on prompt complexity — `smollm2:1.7b-instruct-q4_0` (fast, for simple prompts) and `qwen3.5:4b` (smart, for reasoning/complex requests). A scoring heuristic in `_pick_local_model()` evaluates word count, complexity keywords, and sentence count. The legacy `OLLAMA_MODEL` env-var overrides auto-routing if set.
+- Module 2 (`brain.py`): multi-tier and hybrid LLM routing, async streaming, error handling.
+  - **Local Routing:** Lightweight 1B models replace the slow 4B setup. `smollm2:1.7b-instruct-q4_0` handles snappy voice/chitchat (prompts <= 5 words or low complexity), and `llama3.2:1b` handles general logic/code/explanations.
+  - **Hybrid Research Router:** If in `LLM_MODE=local`, queries with research/study/report intent (`_RESEARCH_KEYWORDS`) are automatically offloaded to the cloud Gemini API (`gemini-3.6-flash`). This prevents CPU throttling and RAM exhaustion on laptop hardware while providing high-depth answers and tool access.
 - Module 1 (`stt.py`): `faster-whisper` + `sounddevice`. Single continuously-open `InputStream`, RMS-based silence trimming, configurable device/thresholds via env. Lazy-loaded model singleton, `warm_up()` for early load.
 - Module 3 (`tts.py`): multi-engine (`piper` default, `edge`, `pyttsx3`), sentence-chunked synthesis, SHA256-keyed audio cache, Windows-specific playback path (`winsound`) with `playsound` fallback, leading-silence padding for Windows device wake-up.
 - Module 4 (`tools/`): Safe, focused submodules — `apps.py` (allowlisted app launching), `system_info.py` (read-only specs), `web.py` (search + page fetch with SSRF protection), `planner.py` (elevated-reasoning project plans). Wired into Gemini function-calling via `schemas.py` (declarations, dispatch, spoken pre-announcements). No arbitrary shell-command capability.
@@ -11,17 +13,17 @@
 ## Current State
 - Modules 1–4 and the orchestrator are built, decoupled (no cross-imports between stt/tts/brain/tools), and async throughout per project coding rules.
 - End-to-end voice loop (listen → think → speak) is functional with tool-calling support in API mode.
-- Local mode uses two-tier model routing: simple prompts → `smollm2` (fast), complex prompts → `qwen3.5` (smart). No tool-calling in local mode (logged warning, graceful fallback).
-- `.env` defaults to `LLM_MODE=local` with `OLLAMA_MODEL_FAST` and `OLLAMA_MODEL_SMART` configured.
+- Local mode uses `smollm2:1.7b` for fast utterances and `llama3.2:1b` for code/logic. In-depth research queries route via Hybrid Offload directly to Gemini API.
+- `.env` configured with `LLM_MODE=local`, `OLLAMA_MODEL_FAST=smollm2:1.7b-instruct-q4_0`, and `OLLAMA_MODEL_SMART=llama3.2:1b`.
 
 ## Environment Variables (brain-related)
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LLM_MODE` | `local` | `local` (Ollama) or `api` (Gemini) |
 | `OLLAMA_MODEL_FAST` | `smollm2:1.7b-instruct-q4_0` | Quick-response model for simple prompts |
-| `OLLAMA_MODEL_SMART` | `qwen3.5:4b` | Capable model for complex/reasoning prompts |
+| `OLLAMA_MODEL_SMART` | `llama3.2:1b` | 1B model for general complex/code prompts |
 | `OLLAMA_MODEL` | _(empty)_ | Legacy override — if set, bypasses auto-routing |
-| `GEMINI_MODEL` | `gemini-3.6-flash` | Cloud model for API mode |
+| `GEMINI_MODEL` | `gemini-3.6-flash` | Cloud model for API mode & hybrid research offload |
 
 ## Project Roadmap (Remaining Steps)
 1. **Step 5:** Add wake word (`wake_word.py`) — passive "Hey OSIRIS" detection via `openwakeword`, gating `listen_and_transcribe()`.
