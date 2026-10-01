@@ -1,8 +1,8 @@
 models/
+.kilo/
 .sixth/
 .vscode/
 .env
 src/__pycache__/
 docs/
 garbage info/
-docs/
