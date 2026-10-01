@@ -60,6 +60,11 @@ async def list_available_apps() -> tuple[str, ...]:
     return tuple(sorted(_configured_apps()))
 
 
+def get_allowed_apps_info() -> dict[str, str]:
+    """Return dictionary of allowed app names to targets."""
+    return _configured_apps()
+
+
 def _launch(target: str) -> None:
     if target.lower().startswith(("ms-settings:", "http://", "https://")):
         os.startfile(target)  # type: ignore[attr-defined]  # Windows-only project.
@@ -83,3 +88,39 @@ async def launch_app(app: str) -> AppLaunchResult:
     except OSError as e:
         raise AppError(f"Could not launch '{normalized}': {e}") from e
     return AppLaunchResult(app=normalized, target=target)
+
+
+def _close_process(target: str) -> int:
+    """Terminate running processes matching the target binary."""
+    # Only target standard executables
+    if not target.lower().endswith(".exe"):
+        return 0
+    exe_name = Path(target).name
+    try:
+        res = subprocess.run(
+            ["taskkill", "/F", "/IM", exe_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return 1 if res.returncode == 0 else 0
+    except Exception:
+        return 0
+
+
+async def close_app(app: str) -> str:
+    """Close/terminate one explicitly allowlisted application."""
+    normalized = app.strip().lower()
+    if not _APP_NAME.fullmatch(normalized):
+        raise AppError("App names may contain only letters, numbers, spaces, underscores, and hyphens.")
+
+    apps = _configured_apps()
+    target = apps.get(normalized)
+    if target is None:
+        available = ", ".join(sorted(apps)) or "none"
+        raise AppError(f"'{app}' is not in the application allowlist. Available: {available}.")
+
+    killed = await asyncio.to_thread(_close_process, target)
+    if killed:
+        return f"Successfully closed {normalized}."
+    return f"{normalized} was closed or not currently running."

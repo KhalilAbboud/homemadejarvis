@@ -49,17 +49,18 @@ GEMINI_MAX_TOOL_TURNS = int(os.getenv("GEMINI_MAX_TOOL_TURNS", "6"))
 # `tool_announcements` parameters below.
 VOICE_SYSTEM_PROMPT = os.getenv(
     "VOICE_SYSTEM_PROMPT",
-    "You are OSIRIS, a helpful voice assistant. Reply in one or two concise "
-    "spoken sentences unless the user explicitly asks for detail. Do not use "
-    "markdown, lists, or filler.",
+    "You are OSIRIS, a helpful personal AI assistant. Reply in concise sentences. "
+    "When asked to open, launch, close, or terminate apps, or check system specs, or search the web, "
+    "always use the available tools directly.",
 )
 
 RESEARCH_SYSTEM_PROMPT = os.getenv(
     "RESEARCH_SYSTEM_PROMPT",
     "You are OSIRIS, an intelligent assistant. When researching, searching for articles, "
     "or looking for live information, use search_web to find relevant results. "
+    "When asked to open, launch, close, or terminate applications or inspect system specs, use the respective tool. "
     "Once you obtain search results with titles, snippets, and URLs, synthesize and provide your "
-    "complete response with article titles, summaries, and URLs directly to the user rather than searching repeatedly.",
+    "complete response with article titles, clickable markdown URLs ([Title](url)), and key takeaways directly to the user.",
 )
 
 # Type aliases for the tool-injection parameters, so callers don't need to
@@ -80,11 +81,12 @@ _RESEARCH_KEYWORDS = {
     "in-depth", "in depth", "detailed", "elaborate", "thorough",
     "whitepaper", "literature review", "full paper", "comprehensive analysis",
     "article", "articles", "paper", "papers", "publication", "publications",
-    "journal", "journals", "news", "recent", "latest",
+    "journal", "journals", "news", "recent", "latest", "headline", "headlines",
 }
 
 _WEB_ACTION_KEYWORDS = {
     "search", "find", "fetch", "lookup", "look up", "browse", "get articles", "find articles",
+    "show articles", "bring articles", "look for",
 }
 
 
@@ -94,7 +96,7 @@ def _is_research_request(prompt: str) -> bool:
     if any(kw in lowered for kw in _RESEARCH_KEYWORDS):
         return True
     if any(kw in lowered for kw in _WEB_ACTION_KEYWORDS) and any(
-        target in lowered for target in ("article", "articles", "news", "paper", "web", "online", "info", "information")
+        target in lowered for target in ("article", "articles", "news", "paper", "web", "online", "info", "information", "about", "for")
     ):
         return True
     return False

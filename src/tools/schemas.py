@@ -33,6 +33,17 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "close_app",
+        "description": "Close or terminate an open desktop application by name (e.g. 'notepad', 'calculator').",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string", "description": "App name, e.g. 'notepad', 'calculator'."},
+            },
+            "required": ["app"],
+        },
+    },
+    {
         "name": "get_system_specs",
         "description": "Get read-only system specs: OS, CPU count, memory, disk space.",
         "parameters": {"type": "object", "properties": {}},
@@ -71,6 +82,15 @@ async def _dispatch_launch_app(app: str) -> dict[str, Any]:
         return {"error": str(e), "available_apps": list(await list_available_apps())}
 
 
+async def _dispatch_close_app(app: str) -> dict[str, Any]:
+    try:
+        from .apps import close_app
+        msg = await close_app(app)
+        return {"result": msg, "app": app}
+    except AppError as e:
+        return {"error": str(e), "available_apps": list(await list_available_apps())}
+
+
 async def _dispatch_get_system_specs() -> dict[str, Any]:
     return await get_system_specs()
 
@@ -93,6 +113,7 @@ async def _dispatch_fetch_web_page(url: str) -> dict[str, Any]:
 
 TOOL_DISPATCH: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
     "launch_app": _dispatch_launch_app,
+    "close_app": _dispatch_close_app,
     "get_system_specs": _dispatch_get_system_specs,
     "search_web": _dispatch_search_web,
     "fetch_web_page": _dispatch_fetch_web_page,
@@ -107,6 +128,7 @@ TOOL_DISPATCH: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
 
 TOOL_ANNOUNCEMENTS: dict[str, Callable[[dict[str, Any]], str]] = {
     "launch_app": lambda args: f"Opening {args.get('app', 'that')}.",
+    "close_app": lambda args: f"Closing {args.get('app', 'that')}.",
     "get_system_specs": lambda _args: "Checking your system specs.",
     "search_web": lambda args: f"Searching the web for {args.get('query', 'that')}.",
     "fetch_web_page": lambda _args: "Pulling up that page.",

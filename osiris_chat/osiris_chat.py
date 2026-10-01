@@ -4,6 +4,8 @@ import asyncio
 import html
 import re
 import sys
+import json
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTextBrowser,
@@ -33,6 +36,7 @@ from PySide6.QtWidgets import (
 from brain import LLMError, stream_llm_response
 from stt import STTError, listen_and_transcribe
 from tts import TTSError, speak
+from tools.apps import close_app, get_allowed_apps_info, launch_app
 
 EXIT_PHRASES = {"exit", "quit", "goodbye", "stop", "bye"}
 
@@ -302,6 +306,74 @@ class OsirisDesktopWindow(QMainWindow):
                 border: 1px solid rgba(96, 165, 250, 0.4);
                 color: #ffffff;
             }
+            /* Right panel: System Models & Allowed Apps */
+            #rightPanel {
+                background: rgba(15, 23, 42, 0.7);
+                border: 1px solid rgba(59, 130, 246, 0.18);
+                border-radius: 16px;
+                padding: 12px;
+                min-width: 250px;
+                max-width: 270px;
+            }
+            .CardBox {
+                background: rgba(11, 18, 33, 0.7);
+                border: 1px solid rgba(59, 130, 246, 0.15);
+                border-radius: 12px;
+                padding: 10px;
+            }
+            .ModelItem {
+                background: rgba(30, 41, 59, 0.6);
+                border: 1px solid rgba(148, 163, 184, 0.12);
+                border-radius: 8px;
+                padding: 7px 10px;
+                margin-bottom: 6px;
+            }
+            .ModelName {
+                font-size: 12px;
+                font-weight: 700;
+                color: #e2e8f0;
+            }
+            .ModelDetail {
+                font-size: 10.5px;
+                color: #64748b;
+                margin-top: 2px;
+            }
+            .AppItem {
+                background: rgba(30, 41, 59, 0.6);
+                border: 1px solid rgba(148, 163, 184, 0.12);
+                border-radius: 8px;
+                padding: 6px 8px;
+                margin-bottom: 6px;
+            }
+            .AppName {
+                font-size: 12px;
+                font-weight: 600;
+                color: #cbd5e1;
+            }
+            .AppActionBtn {
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            .AppOpenBtn {
+                background: rgba(16, 185, 129, 0.2);
+                border: 1px solid rgba(16, 185, 129, 0.4);
+                color: #34d399;
+            }
+            .AppOpenBtn:hover {
+                background: rgba(16, 185, 129, 0.35);
+                color: #ffffff;
+            }
+            .AppCloseBtn {
+                background: rgba(239, 68, 68, 0.18);
+                border: 1px solid rgba(239, 68, 68, 0.4);
+                color: #f87171;
+            }
+            .AppCloseBtn:hover {
+                background: rgba(239, 68, 68, 0.35);
+                color: #ffffff;
+            }
             /* Main Content Cards */
             #mainPanel {
                 background: rgba(15, 23, 42, 0.65);
@@ -448,7 +520,7 @@ class OsirisDesktopWindow(QMainWindow):
         body_layout = QHBoxLayout()
         body_layout.setSpacing(12)
 
-        # Sidebar navigation & quick research prompts
+        # Left Sidebar navigation
         sidebar = QFrame(objectName="sidebar")
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(8, 10, 8, 10)
@@ -457,7 +529,7 @@ class OsirisDesktopWindow(QMainWindow):
         nav_title = QLabel("WORKSPACE", objectName="sidebarTitle")
         sb_layout.addWidget(nav_title)
 
-        self.btn_nav_chat = QPushButton("💬 Chat & Research")
+        self.btn_nav_chat = QPushButton("💬 Quick Chat")
         self.btn_nav_chat.setProperty("class", "NavBtn")
         self.btn_nav_chat.setProperty("active", "true")
         self.btn_nav_chat.clicked.connect(lambda: self._switch_view(0))
@@ -469,36 +541,13 @@ class OsirisDesktopWindow(QMainWindow):
         self.btn_nav_voice.clicked.connect(lambda: self._switch_view(1))
         sb_layout.addWidget(self.btn_nav_voice)
 
-        sb_layout.addSpacing(12)
-        quick_title = QLabel("QUICK RESEARCH", objectName="sidebarTitle")
-        sb_layout.addWidget(quick_title)
-
-        chip_box = QFrame(objectName="chipBox")
-        chip_layout = QVBoxLayout(chip_box)
-        chip_layout.setContentsMargins(4, 4, 4, 4)
-        chip_layout.setSpacing(6)
-
-        prompts = [
-            "Fetch 3 articles about liver cancer",
-            "Search latest discoveries in quantum computing",
-            "What are my system specs?",
-            "Open notepad",
-        ]
-        for p in prompts:
-            chip = QPushButton(p)
-            chip.setProperty("class", "PromptChip")
-            chip.clicked.connect(lambda checked=False, query=p: self._trigger_prompt(query))
-            chip_layout.addWidget(chip)
-
-        sb_layout.addWidget(chip_box)
         sb_layout.addStretch()
-
         body_layout.addWidget(sidebar)
 
-        # Stacked Views (0: Chat/Research view, 1: Voice view)
+        # Stacked Views (0: Chat view, 1: Voice view)
         self.stack = QStackedWidget()
 
-        # VIEW 0: Chat & Research
+        # VIEW 0: Quick Chat
         chat_view = QFrame(objectName="mainPanel")
         cv_layout = QVBoxLayout(chat_view)
         cv_layout.setContentsMargins(8, 8, 8, 8)
@@ -561,8 +610,41 @@ class OsirisDesktopWindow(QMainWindow):
 
         self.stack.addWidget(voice_view)
         body_layout.addWidget(self.stack, stretch=1)
-        root_layout.addLayout(body_layout, stretch=1)
 
+        # Right Panel: Models in Machine & Allowed Apps
+        right_panel = QFrame(objectName="rightPanel")
+        rp_layout = QVBoxLayout(right_panel)
+        rp_layout.setContentsMargins(10, 10, 10, 10)
+        rp_layout.setSpacing(12)
+
+        # Top block: Models in machine
+        models_header = QLabel("MACHINE MODELS", objectName="sidebarTitle")
+        rp_layout.addWidget(models_header)
+
+        models_box = QFrame()
+        models_box.setProperty("class", "CardBox")
+        self.models_box_layout = QVBoxLayout(models_box)
+        self.models_box_layout.setContentsMargins(6, 6, 6, 6)
+        self.models_box_layout.setSpacing(6)
+        self._populate_models_panel()
+        rp_layout.addWidget(models_box)
+
+        # Bottom block: Allowed Apps
+        apps_header = QLabel("ALLOWED APPS", objectName="sidebarTitle")
+        rp_layout.addWidget(apps_header)
+
+        apps_box = QFrame()
+        apps_box.setProperty("class", "CardBox")
+        self.apps_box_layout = QVBoxLayout(apps_box)
+        self.apps_box_layout.setContentsMargins(6, 6, 6, 6)
+        self.apps_box_layout.setSpacing(6)
+        self._populate_apps_panel()
+        rp_layout.addWidget(apps_box)
+
+        rp_layout.addStretch()
+        body_layout.addWidget(right_panel)
+
+        root_layout.addLayout(body_layout, stretch=1)
         self.setCentralWidget(container)
 
     def _switch_view(self, index: int) -> None:
@@ -574,10 +656,98 @@ class OsirisDesktopWindow(QMainWindow):
         self.btn_nav_voice.style().unpolish(self.btn_nav_voice)
         self.btn_nav_voice.style().polish(self.btn_nav_voice)
 
-    def _trigger_prompt(self, query: str) -> None:
+    def _populate_models_panel(self) -> None:
+        """Fetch local Ollama models and display details."""
+        models: list[dict[str, str]] = []
+        try:
+            req = urllib.request.Request("http://localhost:11434/api/tags")
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                data = json.loads(resp.read().decode())
+                for m in data.get("models", []):
+                    details = m.get("details", {})
+                    param_size = details.get("parameter_size", "")
+                    quant = details.get("quantization_level", "")
+                    size_mb = m.get("size", 0) / (1024 * 1024)
+                    size_str = f"{size_mb / 1024:.1f} GB" if size_mb > 1000 else f"{size_mb:.0f} MB"
+                    sub = f"{param_size} • {quant} • {size_str}".strip(" •")
+                    models.append({"name": m.get("name", "unknown"), "info": sub})
+        except Exception:
+            # Fallback to configured env models if ollama is not reachable
+            models = [
+                {"name": "llama3.2:1b", "info": "1.2B • Q8_0 • 1.3 GB (Active Smart)"},
+                {"name": "smollm2:1.7b", "info": "1.7B • Q4_0 • 990 MB (Active Fast)"},
+                {"name": "qwen3.5:4b", "info": "4.7B • Q4_K_M • 3.4 GB (Vision/Tools)"},
+            ]
+
+        for item in models:
+            m_card = QFrame()
+            m_card.setProperty("class", "ModelItem")
+            m_layout = QVBoxLayout(m_card)
+            m_layout.setContentsMargins(6, 4, 6, 4)
+            m_layout.setSpacing(2)
+
+            name_lbl = QLabel(f"🤖 {item['name']}")
+            name_lbl.setProperty("class", "ModelName")
+            m_layout.addWidget(name_lbl)
+
+            info_lbl = QLabel(item["info"])
+            info_lbl.setProperty("class", "ModelDetail")
+            m_layout.addWidget(info_lbl)
+
+            self.models_box_layout.addWidget(m_card)
+
+    def _populate_apps_panel(self) -> None:
+        """Display allowlisted apps with quick Open/Close control buttons."""
+        apps = get_allowed_apps_info()
+        for name, target in sorted(apps.items()):
+            a_card = QFrame()
+            a_card.setProperty("class", "AppItem")
+            a_layout = QHBoxLayout(a_card)
+            a_layout.setContentsMargins(6, 4, 6, 4)
+            a_layout.setSpacing(6)
+
+            title_col = QVBoxLayout()
+            title_col.setSpacing(1)
+            name_lbl = QLabel(f"⚡ {name.title()}")
+            name_lbl.setProperty("class", "AppName")
+            title_col.addWidget(name_lbl)
+
+            target_lbl = QLabel(target)
+            target_lbl.setProperty("class", "ModelDetail")
+            title_col.addWidget(target_lbl)
+            a_layout.addLayout(title_col, stretch=1)
+
+            btn_open = QPushButton("Open")
+            btn_open.setProperty("class", "AppActionBtn AppOpenBtn")
+            btn_open.clicked.connect(lambda checked=False, app_name=name: self._handle_app_launch(app_name))
+            a_layout.addWidget(btn_open)
+
+            # Close button only for killable windows binaries
+            if target.lower().endswith(".exe"):
+                btn_close = QPushButton("Close")
+                btn_close.setProperty("class", "AppActionBtn AppCloseBtn")
+                btn_close.clicked.connect(lambda checked=False, app_name=name: self._handle_app_close(app_name))
+                a_layout.addWidget(btn_close)
+
+            self.apps_box_layout.addWidget(a_card)
+
+    def _handle_app_launch(self, app_name: str) -> None:
         self._switch_view(0)
-        self.text_input.setText(query)
-        self._send_text_message()
+        self._append_chat("You", f"Open {app_name}", "right")
+        try:
+            asyncio.run(launch_app(app_name))
+            self._append_chat("OSIRIS", f"Launched **{app_name}** successfully.", "left")
+        except Exception as exc:
+            self._append_chat("OSIRIS", f"Failed to launch {app_name}: {exc}", "left")
+
+    def _handle_app_close(self, app_name: str) -> None:
+        self._switch_view(0)
+        self._append_chat("You", f"Close {app_name}", "right")
+        try:
+            msg = asyncio.run(close_app(app_name))
+            self._append_chat("OSIRIS", msg, "left")
+        except Exception as exc:
+            self._append_chat("OSIRIS", f"Failed to close {app_name}: {exc}", "left")
 
     def _clear_chat(self) -> None:
         self.chat_log.clear()
