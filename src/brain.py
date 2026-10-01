@@ -322,23 +322,6 @@ async def stream_llm_response(
     """
     if not prompt or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
-
-    # If tools were not explicitly supplied, lazily load the default schemas
-    # so hybrid research offloading and API mode have access to web search, fetch, etc.
-    active_tools = tools
-    active_dispatch = tool_dispatch
-    active_announcements = tool_announcements
-    if active_tools is None:
-        try:
-            from tools.schemas import TOOL_ANNOUNCEMENTS as default_announcements
-            from tools.schemas import TOOL_DECLARATIONS as default_declarations
-            from tools.schemas import TOOL_DISPATCH as default_dispatch
-            active_tools = default_declarations
-            active_dispatch = default_dispatch
-            active_announcements = default_announcements
-        except Exception as e:
-            logger.debug("Default tools could not be loaded: %s", e)
-
     # Hybrid routing: if local mode is set but the user asks for in-depth research,
     # offload to cloud API (Gemini) if GEMINI_API_KEY is available.
     if LLM_MODE == "local" and _is_research_request(prompt) and GEMINI_API_KEY:
@@ -348,9 +331,9 @@ async def stream_llm_response(
             prompt,
             system_prompt=effective_sys_prompt,
             thinking_level=thinking_level,
-            tools=active_tools,
-            tool_dispatch=active_dispatch,
-            tool_announcements=active_announcements,
+            tools=tools,
+            tool_dispatch=tool_dispatch,
+            tool_announcements=tool_announcements,
         ):
             yield text
         return
@@ -363,9 +346,9 @@ async def stream_llm_response(
             prompt,
             system_prompt=system_prompt,
             thinking_level=thinking_level,
-            tools=active_tools,
-            tool_dispatch=active_dispatch,
-            tool_announcements=active_announcements,
+            tools=tools,
+            tool_dispatch=tool_dispatch,
+            tool_announcements=tool_announcements,
         ):
             yield text
     else:

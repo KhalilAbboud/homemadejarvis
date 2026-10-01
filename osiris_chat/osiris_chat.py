@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from tools.schemas import TOOL_ANNOUNCEMENTS, TOOL_DECLARATIONS, TOOL_DISPATCH
 from brain import LLMError, stream_llm_response
 from stt import STTError, listen_and_transcribe
 from tts import TTSError, speak
@@ -107,7 +108,12 @@ def format_markdown_to_html(raw_text: str) -> str:
 async def get_osiris_reply(user_text: str) -> str:
     """Return a completed response from the existing OSIRIS backend."""
     reply_parts: list[str] = []
-    async for token in stream_llm_response(user_text):
+    async for token in stream_llm_response(
+        user_text,
+        tools=TOOL_DECLARATIONS,
+        tool_dispatch=TOOL_DISPATCH,
+        tool_announcements=TOOL_ANNOUNCEMENTS,
+    ):
         reply_parts.append(token)
     return "".join(reply_parts).strip() or "I don't have a response right now."
 
