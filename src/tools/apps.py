@@ -10,12 +10,15 @@ import subprocess
 from dataclasses import dataclass
 from typing import Final
 
+from pathlib import Path
+
 _APP_NAME = re.compile(r"^[a-z0-9][a-z0-9 _-]{0,63}$")
 _DEFAULT_APPS: Final[dict[str, str]] = {
     "calculator": "calc.exe",
     "notepad": "notepad.exe",
     "settings": "ms-settings:",
 }
+_PERSISTENT_FILE = Path(__file__).resolve().parent.parent.parent / "allowed_apps.json"
 
 
 class AppError(RuntimeError):
@@ -31,28 +34,59 @@ class AppLaunchResult:
 def _configured_apps() -> dict[str, str]:
     """
     Return the app allowlist: built-in defaults, overridden/extended by
-    ``OSIRIS_APP_PATHS`` JSON. This merges rather than replaces — setting one
-    custom app in OSIRIS_APP_PATHS must not silently remove calculator,
-    notepad, and settings. To remove a default, override its name with a
-    different target rather than omitting it (omission has no effect).
+    local JSON file and ``OSIRIS_APP_PATHS`` environment variable.
     """
     apps = dict(_DEFAULT_APPS)
-    raw = os.getenv("OSIRIS_APP_PATHS", "").strip()
-    if not raw:
-        return apps
-    try:
-        configured = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise AppError("OSIRIS_APP_PATHS must be a JSON object of app names to paths.") from e
-    if not isinstance(configured, dict):
-        raise AppError("OSIRIS_APP_PATHS must be a JSON object of app names to paths.")
+    if _PERSISTENT_FILE.exists():
+        try:
+            with open(_PERSISTENT_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                if isinstance(saved, dict):
+                    for k, v in saved.items():
+                        apps[str(k).strip().lower()] = str(v).strip()
+        except Exception:
+            pass
 
-    for name, target in configured.items():
-        normalized = str(name).strip().lower()
-        if not _APP_NAME.fullmatch(normalized) or not isinstance(target, str) or not target.strip():
-            raise AppError("Each OSIRIS_APP_PATHS entry needs a safe name and non-empty target.")
-        apps[normalized] = target.strip()
+    raw = os.getenv("OSIRIS_APP_PATHS", "").strip()
+    if raw:
+        try:
+            configured = json.loads(raw)
+            if isinstance(configured, dict):
+                for name, target in configured.items():
+                    normalized = str(name).strip().lower()
+                    if _APP_NAME.fullmatch(normalized) and isinstance(target, str) and target.strip():
+                        apps[normalized] = target.strip()
+        except Exception:
+            pass
+
     return apps
+
+
+def save_allowed_app(name: str, target: str) -> None:
+    """Add or update an allowed application and persist to disk."""
+    normalized = str(name).strip().lower()
+    if not _APP_NAME.fullmatch(normalized):
+        raise AppError("App names may contain only letters, numbers, spaces, underscores, and hyphens.")
+    target_clean = str(target).strip()
+    if not target_clean:
+        raise AppError("Target path or command cannot be empty.")
+
+    current = _configured_apps()
+    current[normalized] = target_clean
+    with open(_PERSISTENT_FILE, "w", encoding="utf-8") as f:
+        json.dump(current, f, indent=2)
+
+
+def remove_allowed_app(name: str) -> bool:
+    """Remove an application from the allowlist."""
+    normalized = str(name).strip().lower()
+    current = _configured_apps()
+    if normalized in current:
+        del current[normalized]
+        with open(_PERSISTENT_FILE, "w", encoding="utf-8") as f:
+            json.dump(current, f, indent=2)
+        return True
+    return False
 
 
 async def list_available_apps() -> tuple[str, ...]:

@@ -17,8 +17,10 @@ from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot, Qt
 from PySide6.QtGui import QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -36,7 +38,13 @@ from PySide6.QtWidgets import (
 from brain import LLMError, stream_llm_response
 from stt import STTError, listen_and_transcribe
 from tts import TTSError, speak
-from tools.apps import close_app, get_allowed_apps_info, launch_app
+from tools.apps import (
+    close_app,
+    get_allowed_apps_info,
+    launch_app,
+    remove_allowed_app,
+    save_allowed_app,
+)
 
 EXIT_PHRASES = {"exit", "quit", "goodbye", "stop", "bye"}
 
@@ -374,6 +382,44 @@ class OsirisDesktopWindow(QMainWindow):
                 background: rgba(239, 68, 68, 0.35);
                 color: #ffffff;
             }
+            .MiniIconBtn {
+                background: rgba(30, 41, 59, 0.8);
+                border: 1px solid rgba(148, 163, 184, 0.25);
+                border-radius: 6px;
+                color: #cbd5e1;
+                font-size: 13px;
+                font-weight: 700;
+                padding: 2px 7px;
+                min-width: 24px;
+            }
+            .MiniIconBtn:hover {
+                background: rgba(59, 130, 246, 0.3);
+                border-color: rgba(96, 165, 250, 0.5);
+                color: #ffffff;
+            }
+            .MiniDeleteBtn {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                color: #94a3b8;
+                font-size: 12px;
+                padding: 2px 6px;
+            }
+            .MiniDeleteBtn:hover {
+                background: rgba(239, 68, 68, 0.2);
+                border: 1px solid rgba(239, 68, 68, 0.4);
+                color: #fca5a5;
+            }
+            .OllamaDownBanner {
+                background: rgba(239, 68, 68, 0.12);
+                border: 1px solid rgba(239, 68, 68, 0.35);
+                border-radius: 8px;
+                padding: 10px;
+                color: #fca5a5;
+                font-size: 11.5px;
+                font-weight: 600;
+                text-align: center;
+            }
             /* Main Content Cards */
             #mainPanel {
                 background: rgba(15, 23, 42, 0.65);
@@ -630,8 +676,25 @@ class OsirisDesktopWindow(QMainWindow):
         rp_layout.addWidget(models_box)
 
         # Bottom block: Allowed Apps
+        apps_header_row = QHBoxLayout()
+        apps_header_row.setContentsMargins(0, 0, 0, 0)
         apps_header = QLabel("ALLOWED APPS", objectName="sidebarTitle")
-        rp_layout.addWidget(apps_header)
+        apps_header_row.addWidget(apps_header)
+        apps_header_row.addStretch()
+
+        self.btn_add_app = QPushButton("+")
+        self.btn_add_app.setProperty("class", "MiniIconBtn")
+        self.btn_add_app.setToolTip("Add an executable (.exe) to allowlist")
+        self.btn_add_app.clicked.connect(self._prompt_add_app)
+        apps_header_row.addWidget(self.btn_add_app)
+
+        self.btn_remove_app = QPushButton("-")
+        self.btn_remove_app.setProperty("class", "MiniIconBtn")
+        self.btn_remove_app.setToolTip("Remove an app from allowlist")
+        self.btn_remove_app.clicked.connect(self._prompt_remove_app)
+        apps_header_row.addWidget(self.btn_remove_app)
+
+        rp_layout.addLayout(apps_header_row)
 
         apps_box = QFrame()
         apps_box.setProperty("class", "CardBox")
@@ -657,12 +720,21 @@ class OsirisDesktopWindow(QMainWindow):
         self.btn_nav_voice.style().polish(self.btn_nav_voice)
 
     def _populate_models_panel(self) -> None:
-        """Fetch local Ollama models and display details."""
+        """Fetch local Ollama models and display details, or show Ollama is down."""
+        # Clear existing items if any
+        while self.models_box_layout.count():
+            item = self.models_box_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
         models: list[dict[str, str]] = []
+        ollama_online = False
         try:
             req = urllib.request.Request("http://localhost:11434/api/tags")
             with urllib.request.urlopen(req, timeout=1.5) as resp:
                 data = json.loads(resp.read().decode())
+                ollama_online = True
                 for m in data.get("models", []):
                     details = m.get("details", {})
                     param_size = details.get("parameter_size", "")
@@ -672,12 +744,14 @@ class OsirisDesktopWindow(QMainWindow):
                     sub = f"{param_size} • {quant} • {size_str}".strip(" •")
                     models.append({"name": m.get("name", "unknown"), "info": sub})
         except Exception:
-            # Fallback to configured env models if ollama is not reachable
-            models = [
-                {"name": "llama3.2:1b", "info": "1.2B • Q8_0 • 1.3 GB (Active Smart)"},
-                {"name": "smollm2:1.7b", "info": "1.7B • Q4_0 • 990 MB (Active Fast)"},
-                {"name": "qwen3.5:4b", "info": "4.7B • Q4_K_M • 3.4 GB (Vision/Tools)"},
-            ]
+            ollama_online = False
+
+        if not ollama_online:
+            down_banner = QLabel("⚠️ Ollama is down\nLocal models unreachable")
+            down_banner.setProperty("class", "OllamaDownBanner")
+            down_banner.setAlignment(Qt.AlignCenter)
+            self.models_box_layout.addWidget(down_banner)
+            return
 
         for item in models:
             m_card = QFrame()
@@ -697,7 +771,14 @@ class OsirisDesktopWindow(QMainWindow):
             self.models_box_layout.addWidget(m_card)
 
     def _populate_apps_panel(self) -> None:
-        """Display allowlisted apps with quick Open/Close control buttons."""
+        """Display allowlisted apps with quick Open control and target binary path."""
+        # Clear existing items if any
+        while self.apps_box_layout.count():
+            item = self.apps_box_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
         apps = get_allowed_apps_info()
         for name, target in sorted(apps.items()):
             a_card = QFrame()
@@ -722,14 +803,63 @@ class OsirisDesktopWindow(QMainWindow):
             btn_open.clicked.connect(lambda checked=False, app_name=name: self._handle_app_launch(app_name))
             a_layout.addWidget(btn_open)
 
-            # Close button only for killable windows binaries
-            if target.lower().endswith(".exe"):
-                btn_close = QPushButton("Close")
-                btn_close.setProperty("class", "AppActionBtn AppCloseBtn")
-                btn_close.clicked.connect(lambda checked=False, app_name=name: self._handle_app_close(app_name))
-                a_layout.addWidget(btn_close)
-
             self.apps_box_layout.addWidget(a_card)
+
+    def _prompt_add_app(self) -> None:
+        """Open file dialog to pick an executable and add it to allowlist."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Application Executable",
+            "C:\\",
+            "Executables (*.exe);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+
+        exe_path = Path(file_path)
+        default_name = exe_path.stem.lower()
+        app_name, ok = QInputDialog.getText(
+            self,
+            "Application Alias",
+            f"Enter name/alias for {exe_path.name}:",
+            text=default_name,
+        )
+        if not ok or not app_name.strip():
+            return
+
+        name_clean = app_name.strip().lower()
+        try:
+            save_allowed_app(name_clean, str(exe_path))
+            self._populate_apps_panel()
+            self._append_chat("OSIRIS", f"Added **{name_clean}** (`{exe_path}`) to the allowed apps list.", "left")
+        except Exception as exc:
+            QMessageBox.warning(self, "Could Not Add App", str(exc))
+
+    def _prompt_remove_app(self) -> None:
+        """Prompt user with list of allowed apps to remove one."""
+        apps = get_allowed_apps_info()
+        if not apps:
+            QMessageBox.information(self, "No Apps", "There are no apps in the allowlist to remove.")
+            return
+
+        items = sorted(apps.keys())
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Remove Allowed Application",
+            "Select app to remove from allowlist:",
+            items,
+            0,
+            False,
+        )
+        if not ok or not choice:
+            return
+
+        removed = remove_allowed_app(choice)
+        if removed:
+            self._populate_apps_panel()
+            self._append_chat("OSIRIS", f"Removed **{choice}** from the allowed apps list.", "left")
+        else:
+            QMessageBox.warning(self, "Error", f"Could not remove {choice}.")
 
     def _handle_app_launch(self, app_name: str) -> None:
         self._switch_view(0)
