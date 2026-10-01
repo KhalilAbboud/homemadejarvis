@@ -35,7 +35,7 @@ REQUEST_TIMEOUT = 30.0
 DEFAULT_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "low")
 # Hard cap on tool-call round-trips per turn, so a confused model calling
 # tools in a loop can't spin forever burning API calls / latency.
-GEMINI_MAX_TOOL_TURNS = int(os.getenv("GEMINI_MAX_TOOL_TURNS", "4"))
+GEMINI_MAX_TOOL_TURNS = int(os.getenv("GEMINI_MAX_TOOL_TURNS", "6"))
 
 # Spoken responses should be short. This reduces both model generation and
 # speech-synthesis time, while still allowing a user to ask for more detail.
@@ -54,6 +54,14 @@ VOICE_SYSTEM_PROMPT = os.getenv(
     "markdown, lists, or filler.",
 )
 
+RESEARCH_SYSTEM_PROMPT = os.getenv(
+    "RESEARCH_SYSTEM_PROMPT",
+    "You are OSIRIS, an intelligent assistant. When researching, searching for articles, "
+    "or looking for live information, use search_web to find relevant results. "
+    "Once you obtain search results with titles, snippets, and URLs, synthesize and provide your "
+    "complete response with article titles, summaries, and URLs directly to the user rather than searching repeatedly.",
+)
+
 # Type aliases for the tool-injection parameters, so callers don't need to
 # reach into the google-genai SDK just to type their own code.
 ToolDispatch = dict[str, Callable[..., Awaitable[dict[str, Any]]]]
@@ -64,20 +72,32 @@ ToolAnnouncements = dict[str, Callable[[dict[str, Any]], str]]
 #  Hybrid & Local Model Routing
 # ---------------------------------------------------------------------------
 
-# Keywords specifically indicating in-depth research, reporting, or data analysis.
+# Keywords specifically indicating research, article queries, web lookup, or reports.
 # When LLM_MODE=local, queries matching these are routed to the cloud API
-# (Gemini) so your local machine doesn't choke on intensive research generation.
+# (Gemini) so the model can invoke web search/fetch tools and provide deep, grounded answers.
 _RESEARCH_KEYWORDS = {
     "research", "report", "scientific", "study", "investigate",
     "in-depth", "in depth", "detailed", "elaborate", "thorough",
     "whitepaper", "literature review", "full paper", "comprehensive analysis",
+    "article", "articles", "paper", "papers", "publication", "publications",
+    "journal", "journals", "news", "recent", "latest",
+}
+
+_WEB_ACTION_KEYWORDS = {
+    "search", "find", "fetch", "lookup", "look up", "browse", "get articles", "find articles",
 }
 
 
 def _is_research_request(prompt: str) -> bool:
-    """Return True if prompt relates to in-depth research or reports."""
+    """Return True if prompt relates to research, articles, or web data retrieval."""
     lowered = prompt.lower()
-    return any(kw in lowered for kw in _RESEARCH_KEYWORDS)
+    if any(kw in lowered for kw in _RESEARCH_KEYWORDS):
+        return True
+    if any(kw in lowered for kw in _WEB_ACTION_KEYWORDS) and any(
+        target in lowered for target in ("article", "articles", "news", "paper", "web", "online", "info", "information")
+    ):
+        return True
+    return False
 
 
 # Keywords for general complex prompts (logic, code, explanations, etc.)
@@ -301,17 +321,34 @@ async def stream_llm_response(
     if not prompt or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
 
+    # If tools were not explicitly supplied, lazily load the default schemas
+    # so hybrid research offloading and API mode have access to web search, fetch, etc.
+    active_tools = tools
+    active_dispatch = tool_dispatch
+    active_announcements = tool_announcements
+    if active_tools is None:
+        try:
+            from tools.schemas import TOOL_ANNOUNCEMENTS as default_announcements
+            from tools.schemas import TOOL_DECLARATIONS as default_declarations
+            from tools.schemas import TOOL_DISPATCH as default_dispatch
+            active_tools = default_declarations
+            active_dispatch = default_dispatch
+            active_announcements = default_announcements
+        except Exception as e:
+            logger.debug("Default tools could not be loaded: %s", e)
+
     # Hybrid routing: if local mode is set but the user asks for in-depth research,
     # offload to cloud API (Gemini) if GEMINI_API_KEY is available.
     if LLM_MODE == "local" and _is_research_request(prompt) and GEMINI_API_KEY:
         logger.info("[router] Research query detected -> hybrid offload to Gemini API")
+        effective_sys_prompt = RESEARCH_SYSTEM_PROMPT if system_prompt == VOICE_SYSTEM_PROMPT else system_prompt
         async for text in _stream_api_response(
             prompt,
-            system_prompt=system_prompt,
+            system_prompt=effective_sys_prompt,
             thinking_level=thinking_level,
-            tools=tools,
-            tool_dispatch=tool_dispatch,
-            tool_announcements=tool_announcements,
+            tools=active_tools,
+            tool_dispatch=active_dispatch,
+            tool_announcements=active_announcements,
         ):
             yield text
         return
@@ -324,9 +361,9 @@ async def stream_llm_response(
             prompt,
             system_prompt=system_prompt,
             thinking_level=thinking_level,
-            tools=tools,
-            tool_dispatch=tool_dispatch,
-            tool_announcements=tool_announcements,
+            tools=active_tools,
+            tool_dispatch=active_dispatch,
+            tool_announcements=active_announcements,
         ):
             yield text
     else:

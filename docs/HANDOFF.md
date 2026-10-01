@@ -1,9 +1,10 @@
 # Session Handoff State
 
 ## Last Completed Task
-- Module 2 (`brain.py`): multi-tier and hybrid LLM routing, async streaming, error handling.
+- Module 2 (`brain.py`) & Module 4 (`tools/`): multi-tier and hybrid LLM routing, async streaming, error handling.
   - **Local Routing:** Lightweight 1B models replace the slow 4B setup. `smollm2:1.7b-instruct-q4_0` handles snappy voice/chitchat (prompts <= 5 words or low complexity), and `llama3.2:1b` handles general logic/code/explanations.
-  - **Hybrid Research Router:** If in `LLM_MODE=local`, queries with research/study/report intent (`_RESEARCH_KEYWORDS`) are automatically offloaded to the cloud Gemini API (`gemini-3.6-flash`). This prevents CPU throttling and RAM exhaustion on laptop hardware while providing high-depth answers and tool access.
+  - **Hybrid Research Router & Auto-Tool Injection:** When in `LLM_MODE=local`, prompts querying articles, web research, papers, or study topics are automatically offloaded to Gemini with `search_web` and `fetch_web_page` tools auto-wired. This prevents local 1B hallucination while delivering live articles, citations, and links.
+  - **Desktop UI Remodel (`osiris_chat.py`):** Completely remodeled dark glassmorphic interface with sidebar navigation, quick research prompt chips, Markdown and clickable hyperlink rendering in `QTextBrowser`, and dedicated Voice Assistant layout.
 - Module 1 (`stt.py`): `faster-whisper` + `sounddevice`. Single continuously-open `InputStream`, RMS-based silence trimming, configurable device/thresholds via env. Lazy-loaded model singleton, `warm_up()` for early load.
 - Module 3 (`tts.py`): multi-engine (`piper` default, `edge`, `pyttsx3`), sentence-chunked synthesis, SHA256-keyed audio cache, Windows-specific playback path (`winsound`) with `playsound` fallback, leading-silence padding for Windows device wake-up.
 - Module 4 (`tools/`): Safe, focused submodules — `apps.py` (allowlisted app launching), `system_info.py` (read-only specs), `web.py` (search + page fetch with SSRF protection), `planner.py` (elevated-reasoning project plans). Wired into Gemini function-calling via `schemas.py` (declarations, dispatch, spoken pre-announcements). No arbitrary shell-command capability.

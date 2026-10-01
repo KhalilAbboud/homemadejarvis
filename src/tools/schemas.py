@@ -39,11 +39,11 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "search_web",
-        "description": "Search the public web and return titles, URLs, and snippets.",
+        "description": "Search the public web and return article titles, URLs, and snippets. Use this to quickly find articles, news, and links, then present the results directly to the user.",
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string"},
+                "query": {"type": "string", "description": "The search query, e.g. 'liver cancer articles'"},
                 "max_results": {"type": "integer", "description": "1-10, default 5."},
             },
             "required": ["query"],
@@ -51,7 +51,7 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "fetch_web_page",
-        "description": "Fetch a specific public web page and return its readable text.",
+        "description": "Fetch a specific public web page and return its readable text. Use only when you need deep article contents beyond what search_web snippets provide.",
         "parameters": {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "Absolute http(s) URL."}},
