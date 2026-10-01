@@ -77,11 +77,11 @@ ToolAnnouncements = dict[str, Callable[[dict[str, Any]], str]]
 # When LLM_MODE=local, queries matching these are routed to the cloud API
 # (Gemini) so the model can invoke web search/fetch tools and provide deep, grounded answers.
 _RESEARCH_KEYWORDS = {
-    "research", "report", "scientific", "study", "investigate",
-    "in-depth", "in depth", "detailed", "elaborate", "thorough",
+    "research", "scientific",
+    "in-depth", "in depth",
     "whitepaper", "literature review", "full paper", "comprehensive analysis",
     "article", "articles", "paper", "papers", "publication", "publications",
-    "journal", "journals", "news", "recent", "latest", "headline", "headlines",
+    "journal", "journals", "news", "headline", "headlines",
 }
 
 _WEB_ACTION_KEYWORDS = {
@@ -96,7 +96,7 @@ def _is_research_request(prompt: str) -> bool:
     if any(kw in lowered for kw in _RESEARCH_KEYWORDS):
         return True
     if any(kw in lowered for kw in _WEB_ACTION_KEYWORDS) and any(
-        target in lowered for target in ("article", "articles", "news", "paper", "web", "online", "info", "information", "about", "for")
+        target in lowered for target in ("article", "articles", "news", "paper", "web", "online", "info", "information")
     ):
         return True
     return False
