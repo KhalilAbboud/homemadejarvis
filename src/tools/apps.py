@@ -20,6 +20,8 @@ _DEFAULT_APPS: Final[dict[str, str]] = {
 }
 _PERSISTENT_FILE = Path(__file__).resolve().parent.parent.parent / "allowed_apps.json"
 
+_launched_pids: dict[str, int] = {}
+
 
 class AppError(RuntimeError):
     """Raised when an application cannot be launched safely."""
@@ -99,11 +101,11 @@ def get_allowed_apps_info() -> dict[str, str]:
     return _configured_apps()
 
 
-def _launch(target: str) -> None:
+def _launch(target: str) -> subprocess.Popen | None:
     if target.lower().startswith(("ms-settings:", "http://", "https://")):
-        os.startfile(target)  # type: ignore[attr-defined]  # Windows-only project.
-        return
-    subprocess.Popen([target], shell=False, close_fds=True)
+        os.startfile(target)  # type: ignore[attr-defined]
+        return None  # no PID to track for these
+    return subprocess.Popen([target], shell=False, close_fds=True)
 
 
 async def launch_app(app: str) -> AppLaunchResult:
@@ -118,43 +120,44 @@ async def launch_app(app: str) -> AppLaunchResult:
         available = ", ".join(sorted(apps)) or "none"
         raise AppError(f"'{app}' is not in the application allowlist. Available: {available}.")
     try:
-        await asyncio.to_thread(_launch, target)
+        proc = await asyncio.to_thread(_launch, target)
     except OSError as e:
         raise AppError(f"Could not launch '{normalized}': {e}") from e
-    return AppLaunchResult(app=normalized, target=target)
+    if proc is not None:
+        _launched_pids[normalized] = proc.pid
+    return AppLaunchResult(app=normalized, target=target)   
 
 
-def _close_process(target: str) -> int:
-    """Terminate running processes matching the target binary."""
-    # Only target standard executables
+def _close_process(target: str, pid: int | None) -> int:
+    if pid is not None:
+        try:
+            res = subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, text=True, check=False)
+            return 1 if res.returncode == 0 else 0
+        except Exception:
+            return 0
     if not target.lower().endswith(".exe"):
         return 0
     exe_name = Path(target).name
     try:
-        res = subprocess.run(
-            ["taskkill", "/F", "/IM", exe_name],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        res = subprocess.run(["taskkill", "/F", "/IM", exe_name], capture_output=True, text=True, check=False)
         return 1 if res.returncode == 0 else 0
     except Exception:
         return 0
 
 
 async def close_app(app: str) -> str:
-    """Close/terminate one explicitly allowlisted application."""
     normalized = app.strip().lower()
     if not _APP_NAME.fullmatch(normalized):
         raise AppError("App names may contain only letters, numbers, spaces, underscores, and hyphens.")
-
     apps = _configured_apps()
     target = apps.get(normalized)
     if target is None:
         available = ", ".join(sorted(apps)) or "none"
         raise AppError(f"'{app}' is not in the application allowlist. Available: {available}.")
 
-    killed = await asyncio.to_thread(_close_process, target)
+    pid = _launched_pids.pop(normalized, None)
+    killed = await asyncio.to_thread(_close_process, target, pid)
     if killed:
-        return f"Successfully closed {normalized}."
+        scope = "the window I opened" if pid is not None else f"all running {normalized}"
+        return f"Successfully closed {scope}."
     return f"{normalized} was closed or not currently running."
