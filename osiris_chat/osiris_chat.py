@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import re
 import sys
-import json
 import urllib.request
 from pathlib import Path
 
@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+from voice_commands import is_exit_command
 
 from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot, Qt
 from PySide6.QtGui import QDesktopServices, QFont, QIcon
@@ -46,9 +48,6 @@ from tools.apps import (
     remove_allowed_app,
     save_allowed_app,
 )
-
-EXIT_PHRASES = {"exit", "quit", "goodbye", "stop", "bye"}
-
 
 def format_markdown_to_html(raw_text: str) -> str:
     """Format markdown text safely into rich, clickable HTML for QTextBrowser."""
@@ -147,8 +146,7 @@ class AssistantWorker(QObject):
                 self.voice_reply_ready.emit("", "I didn't catch that.")
                 return
 
-            normalized = transcript.strip().lower()
-            if normalized in EXIT_PHRASES:
+            if is_exit_command(transcript):
                 try:
                     asyncio.run(speak("Goodbye."))
                 except TTSError:
@@ -943,7 +941,7 @@ class OsirisDesktopWindow(QMainWindow):
         if not text:
             return
 
-        if text.lower() in EXIT_PHRASES:
+        if is_exit_command(text):
             self._append_chat("You", text, "right")
             self._append_chat("OSIRIS", "Goodbye.", "left")
             self.text_input.clear()

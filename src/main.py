@@ -10,6 +10,7 @@ import re
 from brain import LLMError, stream_llm_response
 from stt import STTError, listen_and_transcribe, warm_up as warm_up_stt
 from tts import TTSError, speak, warm_up as warm_up_tts
+from voice_commands import is_exit_command
 
 # The orchestrator is the one module allowed to know about every other
 # module (brain, stt, tts, tools) — it's the composition root. Individual
@@ -43,33 +44,11 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger("osiris.main")
 
-EXIT_PHRASES = {"exit", "quit", "goodbye", "stop", "stop listening"}
-# An exit phrase spoken at the end of a short utterance still means "stop"
-# ("and stop", "okay, stop listening"), but a negated or question form must not
-# ("don't stop", "should I stop?").
-_NEGATION_RE = re.compile(r"\b(?:don't|do not|dont|never|can't|cannot|won't|will not)\b")
-_MAX_EXIT_UTTERANCE_WORDS = 5
 # Wait until a character follows punctuation. This prevents an arriving token
 # such as "3." or an abbreviation from being spoken as a finished sentence.
 _SENTENCE_END = re.compile(r"^(.+?[.!?])\s+", re.DOTALL)
 
 _PROJECT_PLANNING_TRIGGERS = ("project plan", "plan this project", "plan a project", "help me plan")
-
-
-def _is_exit_command(text: str) -> bool:
-    normalized = text.strip().lower().rstrip(".!?").strip()
-    if not normalized:
-        return False
-    if normalized in EXIT_PHRASES:
-        return True
-    if "?" in text or _NEGATION_RE.search(normalized):
-        return False
-    words = normalized.replace(",", " ").split()
-    if len(words) > _MAX_EXIT_UTTERANCE_WORDS:
-        return False
-    trailing = " ".join(words[-2:])
-    return words[-1] in EXIT_PHRASES or trailing in EXIT_PHRASES
-
 
 def _is_project_planning_request(text: str) -> bool:
     """Route explicit project-planning requests to the deeper planner."""
@@ -184,7 +163,7 @@ async def run() -> None:
             continue
 
         print(f"You: {user_text}")
-        if _is_exit_command(user_text):
+        if is_exit_command(user_text):
             try:
                 await speak("Goodbye.")
             except TTSError as e:
