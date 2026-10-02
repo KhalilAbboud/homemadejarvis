@@ -9,6 +9,8 @@ import re
 import subprocess
 from dataclasses import dataclass
 from typing import Final
+import logging
+logger = logging.getLogger("osiris.apps")
 
 from pathlib import Path
 
@@ -34,20 +36,18 @@ class AppLaunchResult:
 
 
 def _configured_apps() -> dict[str, str]:
-    """
-    Return the app allowlist: built-in defaults, overridden/extended by
-    local JSON file and ``OSIRIS_APP_PATHS`` environment variable.
-    """
     apps = dict(_DEFAULT_APPS)
     if _PERSISTENT_FILE.exists():
         try:
             with open(_PERSISTENT_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-                if isinstance(saved, dict):
-                    for k, v in saved.items():
-                        apps[str(k).strip().lower()] = str(v).strip()
-        except Exception:
-            pass
+            if isinstance(saved, dict):
+                for k, v in saved.items():
+                    apps[str(k).strip().lower()] = str(v).strip()
+            else:
+                logger.warning("%s does not contain a JSON object; ignoring.", _PERSISTENT_FILE)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Could not read %s (%s); using defaults/env only.", _PERSISTENT_FILE, e)
 
     raw = os.getenv("OSIRIS_APP_PATHS", "").strip()
     if raw:
@@ -58,8 +58,10 @@ def _configured_apps() -> dict[str, str]:
                     normalized = str(name).strip().lower()
                     if _APP_NAME.fullmatch(normalized) and isinstance(target, str) and target.strip():
                         apps[normalized] = target.strip()
-        except Exception:
-            pass
+            else:
+                logger.warning("OSIRIS_APP_PATHS is not a JSON object; ignoring.")
+        except json.JSONDecodeError as e:
+            logger.warning("OSIRIS_APP_PATHS is not valid JSON (%s); ignoring.", e)
 
     return apps
 
