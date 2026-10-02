@@ -125,6 +125,9 @@ class AssistantWorker(QObject):
     text_reply_ready = Signal(str)
     voice_reply_ready = Signal(str, str)
     error_occurred = Signal(str)
+    app_launch_requested = Signal(str)
+    app_close_requested = Signal(str)
+    app_action_done = Signal(str, str)  # app_name, result message
 
     @Slot(str)
     def ask_text(self, text: str) -> None:
@@ -163,6 +166,22 @@ class AssistantWorker(QObject):
             self.voice_reply_ready.emit(transcript, reply)
         except (STTError, LLMError, TTSError, Exception) as exc:
             self.error_occurred.emit(f"Voice error: {exc}")
+    
+    @Slot(str)
+    def do_launch_app(self, app_name: str) -> None:
+        try:
+            asyncio.run(launch_app(app_name))
+            self.app_action_done.emit(app_name, f"Launched **{app_name}** successfully.")
+        except Exception as exc:
+            self.app_action_done.emit(app_name, f"Failed to launch {app_name}: {exc}")
+
+    @Slot(str)
+    def do_close_app(self, app_name: str) -> None:
+        try:
+            msg = asyncio.run(close_app(app_name))
+            self.app_action_done.emit(app_name, msg)
+        except Exception as exc:
+            self.app_action_done.emit(app_name, f"Failed to close {app_name}: {exc}")
 
 
 class OsirisDesktopWindow(QMainWindow):
@@ -191,10 +210,13 @@ class OsirisDesktopWindow(QMainWindow):
         self.worker.error_occurred.connect(self._on_error)
         self.worker.text_requested.connect(self.worker.ask_text)
         self.worker.voice_requested.connect(self.worker.ask_voice)
+        self.worker.app_action_done.connect(self._on_app_action_done)
+        self.worker.app_launch_requested.connect(self.worker.do_launch_app)
+        self.worker.app_close_requested.connect(self.worker.do_close_app)
 
         self.send_button.clicked.connect(self._send_text_message)
         self.text_input.returnPressed.connect(self._send_text_message)
-        self.clear_button.clicked.connect(self._clear_chat)
+        self.clear_button.clicked.connect(self._clear_chat) 
         self.listen_button.clicked.connect(self._start_voice_turn)
 
         self.set_status("Ready")
@@ -870,20 +892,12 @@ class OsirisDesktopWindow(QMainWindow):
     def _handle_app_launch(self, app_name: str) -> None:
         self._switch_view(0)
         self._append_chat("You", f"Open {app_name}", "right")
-        try:
-            asyncio.run(launch_app(app_name))
-            self._append_chat("OSIRIS", f"Launched **{app_name}** successfully.", "left")
-        except Exception as exc:
-            self._append_chat("OSIRIS", f"Failed to launch {app_name}: {exc}", "left")
+        self.worker.app_launch_requested.emit(app_name)
 
     def _handle_app_close(self, app_name: str) -> None:
         self._switch_view(0)
         self._append_chat("You", f"Close {app_name}", "right")
-        try:
-            msg = asyncio.run(close_app(app_name))
-            self._append_chat("OSIRIS", msg, "left")
-        except Exception as exc:
-            self._append_chat("OSIRIS", f"Failed to close {app_name}: {exc}", "left")
+        self.worker.app_close_requested.emit(app_name)
 
     def _clear_chat(self) -> None:
         self.chat_log.clear()
@@ -963,6 +977,9 @@ class OsirisDesktopWindow(QMainWindow):
         self.send_button.setEnabled(True)
         self.listen_button.setEnabled(True)
         QMessageBox.critical(self, "OSIRIS Error", message)
+    
+    def _on_app_action_done(self, app_name: str, message: str) -> None:
+        self._append_chat("OSIRIS", message, "left")
 
     def closeEvent(self, event) -> None:
         self.thread.quit()
