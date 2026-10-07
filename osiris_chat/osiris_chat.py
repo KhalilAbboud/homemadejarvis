@@ -15,7 +15,7 @@ if str(SRC) not in sys.path:
 
 from voice_commands import is_exit_command
 
-from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot, Qt
+from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot, Qt
 from PySide6.QtGui import QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -127,6 +127,8 @@ class AssistantWorker(QObject):
     app_launch_requested = Signal(str)
     app_close_requested = Signal(str)
     app_action_done = Signal(str, str)  # app_name, result message
+    models_requested = Signal()
+    models_fetched = Signal(list, bool)  # models, ollama_online
 
     @Slot(str)
     def ask_text(self, text: str) -> None:
@@ -164,6 +166,28 @@ class AssistantWorker(QObject):
             self.voice_reply_ready.emit(transcript, reply)
         except (STTError, LLMError, TTSError, Exception) as exc:
             self.error_occurred.emit(f"Voice error: {exc}")
+    
+    @Slot()
+    def fetch_models(self) -> None:
+        """Fetch locally available Ollama models off the GUI thread."""
+        models: list[dict[str, str]] = []
+        ollama_online = False
+        try:
+            req = urllib.request.Request("http://localhost:11434/api/tags")
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                data = json.loads(resp.read().decode())
+                ollama_online = True
+                for m in data.get("models", []):
+                    details = m.get("details", {})
+                    param_size = details.get("parameter_size", "")
+                    quant = details.get("quantization_level", "")
+                    size_mb = m.get("size", 0) / (1024 * 1024)
+                    size_str = f"{size_mb / 1024:.1f} GB" if size_mb > 1000 else f"{size_mb:.0f} MB"
+                    sub = f"{param_size} • {quant} • {size_str}".strip(" •")
+                    models.append({"name": m.get("name", "unknown"), "info": sub})
+        except Exception:
+            ollama_online = False
+        self.models_fetched.emit(models, ollama_online)
     
     @Slot(str)
     def do_launch_app(self, app_name: str) -> None:
@@ -211,13 +235,21 @@ class OsirisDesktopWindow(QMainWindow):
         self.worker.app_action_done.connect(self._on_app_action_done)
         self.worker.app_launch_requested.connect(self.worker.do_launch_app)
         self.worker.app_close_requested.connect(self.worker.do_close_app)
+        self.worker.models_fetched.connect(self._on_models_fetched)
+        self.worker.models_requested.connect(self.worker.fetch_models)
 
         self.send_button.clicked.connect(self._send_text_message)
         self.text_input.returnPressed.connect(self._send_text_message)
         self.clear_button.clicked.connect(self._clear_chat) 
         self.listen_button.clicked.connect(self._start_voice_turn)
 
+        self.worker.models_requested.emit()
+        self.models_poll_timer = QTimer(self)
+        self.models_poll_timer.setInterval(1000)
+        self.models_poll_timer.timeout.connect(self.worker.models_requested.emit)
+        self.models_poll_timer.start()
         self.set_status("Ready")
+
         self._append_chat("OSIRIS", "Hello! I am OSIRIS. I can research topics, search live web articles, inspect system specs, and assist via voice or text.", "left")
 
     @staticmethod
@@ -698,7 +730,7 @@ class OsirisDesktopWindow(QMainWindow):
         self.models_box_layout = QVBoxLayout(models_box)
         self.models_box_layout.setContentsMargins(6, 6, 6, 6)
         self.models_box_layout.setSpacing(6)
-        self._populate_models_panel()
+        self._render_models_panel([], True)
         rp_layout.addWidget(models_box)
 
         # Bottom block: Allowed Apps
@@ -745,32 +777,14 @@ class OsirisDesktopWindow(QMainWindow):
         self.btn_nav_voice.style().unpolish(self.btn_nav_voice)
         self.btn_nav_voice.style().polish(self.btn_nav_voice)
 
-    def _populate_models_panel(self) -> None:
-        """Fetch local Ollama models and display details, or show Ollama is down."""
+    def _render_models_panel(self, models: list[dict[str, str]], ollama_online: bool) -> None:
+        """Render the models panel from already-fetched data — no network calls here."""
         # Clear existing items if any
         while self.models_box_layout.count():
             item = self.models_box_layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.deleteLater()
-
-        models: list[dict[str, str]] = []
-        ollama_online = False
-        try:
-            req = urllib.request.Request("http://localhost:11434/api/tags")
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                data = json.loads(resp.read().decode())
-                ollama_online = True
-                for m in data.get("models", []):
-                    details = m.get("details", {})
-                    param_size = details.get("parameter_size", "")
-                    quant = details.get("quantization_level", "")
-                    size_mb = m.get("size", 0) / (1024 * 1024)
-                    size_str = f"{size_mb / 1024:.1f} GB" if size_mb > 1000 else f"{size_mb:.0f} MB"
-                    sub = f"{param_size} • {quant} • {size_str}".strip(" •")
-                    models.append({"name": m.get("name", "unknown"), "info": sub})
-        except Exception:
-            ollama_online = False
 
         if not ollama_online:
             down_banner = QLabel("⚠️ Ollama is down\nLocal models unreachable")
@@ -979,7 +993,11 @@ class OsirisDesktopWindow(QMainWindow):
     def _on_app_action_done(self, app_name: str, message: str) -> None:
         self._append_chat("OSIRIS", message, "left")
 
+    def _on_models_fetched(self, models: list, ollama_online: bool) -> None:
+        self._render_models_panel(models, ollama_online)
+
     def closeEvent(self, event) -> None:
+        self.models_poll_timer.stop()
         self.thread.quit()
         self.thread.wait()
         super().closeEvent(event)
