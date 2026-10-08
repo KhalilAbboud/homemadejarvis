@@ -923,16 +923,13 @@ class OsirisDesktopWindow(QMainWindow):
         direction = "flex-end" if is_user else "flex-start"
         bg = "rgba(37, 99, 235, 0.22)" if is_user else "rgba(15, 23, 42, 0.85)"
         border = "rgba(59, 130, 246, 0.45)" if is_user else "rgba(71, 85, 105, 0.4)"
-        header_color = "#93c5fd" if is_user else "#38bdf8"
-        icon_badge = "👤 You" if is_user else "⚡ OSIRIS"
 
         formatted_msg = format_markdown_to_html(message)
 
         bubble = (
-            f"<div style='margin: 12px 0; display: flex; justify-content: {direction};'>"
-            f"<div style='max-width: 82%; padding: 14px 18px; border-radius: 14px; "
+            f"<div style='margin: 10px 0; display: flex; justify-content: {direction};'>"
+            f"<div style='max-width: 82%; padding: 12px 16px; border-radius: 14px; "
             f"background: {bg}; border: 1px solid {border}; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);'>"
-            f"<div style='font-size: 11px; color: {header_color}; margin-bottom: 6px; font-weight: 800; letter-spacing: 0.5px;'>{icon_badge}</div>"
             f"<div style='color: #f1f5f9; line-height: 1.6; font-size: 13.5px;'>{formatted_msg}</div>"
             "</div></div>"
         )
