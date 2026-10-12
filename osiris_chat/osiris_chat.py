@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from voice_commands import is_exit_command
+from chat_widgets import ChatView
 
 from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot, Qt
 from PySide6.QtGui import QDesktopServices, QFont, QIcon
@@ -268,6 +269,8 @@ class OsirisDesktopWindow(QMainWindow):
         palette.setColor(QPalette.ButtonText, QColor("#f8fafc"))
         palette.setColor(QPalette.Highlight, QColor("#3b82f6"))
         palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+        palette.setColor(QPalette.Link, QColor("#60a5fa"))
+        palette.setColor(QPalette.LinkVisited, QColor("#a78bfa"))
         return palette
 
     @staticmethod
@@ -504,6 +507,15 @@ class OsirisDesktopWindow(QMainWindow):
             #chatLog QScrollBar::handle:vertical:hover {
                 background: rgba(96, 165, 250, 0.6);
             }
+            #chatContent { background: transparent; }
+            #bubble { border-radius: 14px; }
+            #bubble[role="user"] { background: rgba(37, 99, 235, 0.25); border: 1px solid rgba(59, 130, 246, 0.45); }
+            #bubble[role="assistant"] { background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(71, 85, 105, 0.45); }
+            #bubble[role="error"] { background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); }
+            #bubbleBadge { font-size: 11px; font-weight: 800; color: #38bdf8; background: transparent; border: none; }
+            #bubbleBadge[role="user"] { color: #93c5fd; }
+            #bubbleBadge[role="error"] { color: #f87171; }
+            #bubbleBody { font-size: 13.5px; color: #f1f5f9; background: transparent; border: none; }
             /* Input controls */
             #inputContainer {
                 background: rgba(15, 23, 42, 0.85);
@@ -657,9 +669,7 @@ class OsirisDesktopWindow(QMainWindow):
         cv_layout.setContentsMargins(8, 8, 8, 8)
         cv_layout.setSpacing(10)
 
-        self.chat_log = QTextBrowser(objectName="chatLog")
-        self.chat_log.setOpenExternalLinks(True)
-        self.chat_log.anchorClicked.connect(self._handle_link_click)
+        self.chat_log = ChatView()
         cv_layout.addWidget(self.chat_log)
 
         # Input Row
@@ -919,22 +929,8 @@ class OsirisDesktopWindow(QMainWindow):
         QDesktopServices.openUrl(url)
 
     def _append_chat(self, speaker: str, message: str, alignment: str) -> None:
-        is_user = alignment == "right"
-        direction = "flex-end" if is_user else "flex-start"
-        bg = "rgba(37, 99, 235, 0.22)" if is_user else "rgba(15, 23, 42, 0.85)"
-        border = "rgba(59, 130, 246, 0.45)" if is_user else "rgba(71, 85, 105, 0.4)"
-
-        formatted_msg = format_markdown_to_html(message)
-
-        bubble = (
-            f"<div style='margin: 10px 0; display: flex; justify-content: {direction};'>"
-            f"<div style='max-width: 82%; padding: 12px 16px; border-radius: 14px; "
-            f"background: {bg}; border: 1px solid {border}; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);'>"
-            f"<div style='color: #f1f5f9; line-height: 1.6; font-size: 13.5px;'>{formatted_msg}</div>"
-            "</div></div>"
-        )
-        self.chat_log.insertHtml(bubble)
-        self.chat_log.verticalScrollBar().setValue(self.chat_log.verticalScrollBar().maximum())
+        role = "user" if alignment == "right" else "assistant"
+        self.chat_log.add_message(message, role)
 
     def set_status(self, message: str) -> None:
         if "Listening" in message:
@@ -976,8 +972,7 @@ class OsirisDesktopWindow(QMainWindow):
         if transcript:
             self.voice_transcript.setPlainText(transcript)
         if reply:
-            formatted = format_markdown_to_html(reply)
-            self.voice_reply.setHtml(f"<div style='color: #f1f5f9; line-height: 1.6;'>{formatted}</div>")
+            self.voice_reply.setMarkdown(reply)
         self.listen_button.setEnabled(True)
         self.set_status("Ready")
 
