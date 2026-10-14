@@ -276,7 +276,7 @@ async def _stream_api_response(
                 announce = (tool_announcements or {}).get(call.name)
                 if announce:
                     try:
-                        yield announce(dict(call.args or {}))
+                        yield announce(dict(call.args or {})) + " "
                     except Exception:  # an announcement must never break the turn
                         logger.warning("Tool announcement for '%s' failed to render.", call.name)
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from async_runner import CancellableRunner
+
 import asyncio
 import html
 import json
@@ -104,7 +107,6 @@ def format_markdown_to_html(raw_text: str) -> str:
 
     return "".join(processed)
 
-
 async def get_osiris_reply(user_text: str) -> str:
     """Return a completed response from the existing OSIRIS backend."""
     reply_parts: list[str] = []
@@ -119,6 +121,7 @@ async def get_osiris_reply(user_text: str) -> str:
 
 
 class AssistantWorker(QObject):
+    token_ready = Signal(str)
     text_requested = Signal(str)
     voice_requested = Signal()
     status_changed = Signal(str)
@@ -130,41 +133,57 @@ class AssistantWorker(QObject):
     app_action_done = Signal(str, str)  # app_name, result message
     models_requested = Signal()
     models_fetched = Signal(list, bool)  # models, ollama_online
+    cancelled = Signal()
 
-    @Slot(str)
-    def ask_text(self, text: str) -> None:
-        try:
-            self.status_changed.emit("Researching & Thinking...")
-            reply = asyncio.run(get_osiris_reply(text))
-            self.text_reply_ready.emit(reply)
-        except Exception as exc:
-            self.error_occurred.emit(f"OSIRIS error: {exc}")
+    def __init__(self) -> None:
+        super().__init__()
+        self._runner = CancellableRunner()
+
+    def cancel_current(self) -> None:
+        """Abort whatever the worker is doing. Call from the GUI thread; not a slot."""
+        self._runner.cancel()
+
+    async def _stream_reply(self, text: str) -> str:
+        parts: list[str] = []
+        async for token in stream_llm_response(
+            text,
+            tools=TOOL_DECLARATIONS,
+            tool_dispatch=TOOL_DISPATCH,
+            tool_announcements=TOOL_ANNOUNCEMENTS,
+        ):
+            parts.append(token)
+            self.token_ready.emit(token)
+        return "".join(parts).strip()
 
     @Slot()
     def ask_voice(self) -> None:
+        self._runner.begin()
         try:
             self.status_changed.emit("Listening...")
-            transcript = asyncio.run(listen_and_transcribe())
+            transcript = self._runner.run(listen_and_transcribe())
             if not transcript:
                 self.voice_reply_ready.emit("", "I didn't catch that.")
                 return
 
             if is_exit_command(transcript):
                 try:
-                    asyncio.run(speak("Goodbye."))
+                    self._runner.run(speak("Goodbye."))
                 except TTSError:
                     pass
                 self.voice_reply_ready.emit(transcript, "Goodbye.")
                 return
 
             self.status_changed.emit("Processing reply...")
-            reply = asyncio.run(get_osiris_reply(transcript))
+            reply = self._runner.run(get_osiris_reply(transcript))
             self.status_changed.emit("Speaking...")
             try:
-                asyncio.run(speak(reply))
+                self._runner.run(speak(reply))
             except TTSError:
                 pass
             self.voice_reply_ready.emit(transcript, reply)
+
+        except asyncio.CancelledError:
+            self.cancelled.emit()
         except (STTError, LLMError, TTSError, Exception) as exc:
             self.error_occurred.emit(f"Voice error: {exc}")
     
@@ -206,11 +225,25 @@ class AssistantWorker(QObject):
         except Exception as exc:
             self.app_action_done.emit(app_name, f"Failed to close {app_name}: {exc}")
 
+    @Slot(str)
+    def ask_text(self, text: str) -> None:
+        self._runner.begin()
+        try:
+            self.status_changed.emit("Thinking...")
+            reply = self._runner.run(self._stream_reply(text))
+            self.text_reply_ready.emit(reply or "I don't have a response right now.")
+        except asyncio.CancelledError:
+            self.cancelled.emit()
+        except Exception as exc:
+            self.error_occurred.emit(f"OSIRIS error: {exc}")
+
 
 class OsirisDesktopWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("OSIRIS AI Workstation")
+        self._pending_bubble = None
+        self._stream_text = ""
+        self.setWindowTitle("OSIRIS")
         self.resize(1260, 820)
         self.setMinimumSize(960, 680)
 
@@ -238,8 +271,9 @@ class OsirisDesktopWindow(QMainWindow):
         self.worker.app_close_requested.connect(self.worker.do_close_app)
         self.worker.models_fetched.connect(self._on_models_fetched)
         self.worker.models_requested.connect(self.worker.fetch_models)
+        self.worker.cancelled.connect(self._on_cancelled)
 
-        self.send_button.clicked.connect(self._send_text_message)
+        self.send_button.clicked.connect(self._on_send_clicked)
         self.text_input.returnPressed.connect(self._send_text_message)
         self.clear_button.clicked.connect(self._clear_chat) 
         self.listen_button.clicked.connect(self._start_voice_turn)
@@ -923,6 +957,7 @@ class OsirisDesktopWindow(QMainWindow):
 
     def _clear_chat(self) -> None:
         self.chat_log.clear()
+        self._pending_bubble = None
         self._append_chat("OSIRIS", "Chat history cleared. How may I assist you now?", "left")
 
     def _handle_link_click(self, url: QUrl) -> None:
@@ -943,7 +978,15 @@ class OsirisDesktopWindow(QMainWindow):
             self.status_label.setStyleSheet("background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399;")
             self.status_label.setText(f"● {message}")
 
+    def _on_send_clicked(self) -> None:
+        if self._pending_bubble is not None:
+            self.worker.cancel_current()
+        else:
+            self._send_text_message()
+
     def _send_text_message(self) -> None:
+        if self._pending_bubble is not None: return
+
         text = self.text_input.text().strip()
         if not text:
             return
@@ -956,16 +999,27 @@ class OsirisDesktopWindow(QMainWindow):
 
         self._append_chat("You", text, "right")
         self.text_input.clear()
-        self.send_button.setEnabled(False)
+        self.send_button.setText("Stop")
         self.worker.text_requested.emit(text)
 
     def _start_voice_turn(self) -> None:
         self.listen_button.setEnabled(False)
         self.worker.voice_requested.emit()
+    
+    def _on_token(self, token: str) -> None:
+        if self._pending_bubble is None:
+            return
+        self._stream_text += token
+        self.chat_log.update_bubble(self._pending_bubble, self._stream_text)
 
     def _on_text_reply(self, reply: str) -> None:
-        self._append_chat("OSIRIS", reply, "left")
+        if self._pending_bubble is not None:
+            self.chat_log.update_bubble(self._pending_bubble, reply)
+            self._pending_bubble = None
+        else:
+            self._append_chat("OSIRIS", reply, "left")
         self.send_button.setEnabled(True)
+        self.send_button.setText("Send")
         self.set_status("Ready")
 
     def _on_voice_reply(self, transcript: str, reply: str) -> None:
@@ -979,19 +1033,41 @@ class OsirisDesktopWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         self.set_status("Error")
         self.send_button.setEnabled(True)
+        self.send_button.setText("Send")
         self.listen_button.setEnabled(True)
-        QMessageBox.critical(self, "OSIRIS Error", message)
+        if self.stack.currentIndex() == 1:  # voice view has no chat log
+            self.voice_reply.setPlainText(message)
+        elif self._pending_bubble is not None:
+            self.chat_log.update_bubble(self._pending_bubble, message, role="error")
+        else:
+            self.chat_log.add_message(message, "error")
+        self._pending_bubble = None
     
     def _on_app_action_done(self, app_name: str, message: str) -> None:
         self._append_chat("OSIRIS", message, "left")
 
     def _on_models_fetched(self, models: list, ollama_online: bool) -> None:
         self._render_models_panel(models, ollama_online)
+    
+    def _on_cancelled(self) -> None:
+        if self._pending_bubble is not None:
+            partial = self._stream_text.strip()
+            self.chat_log.update_bubble(
+                self._pending_bubble, f"{partial}\n\n*(stopped)*" if partial else "*Stopped.*"
+            )
+            self._pending_bubble = None
+        self.send_button.setEnabled(True)
+        self.send_button.setText("Send")
+        self.listen_button.setEnabled(True)
+        self.set_status("Ready")
 
     def closeEvent(self, event) -> None:
         self.models_poll_timer.stop()
+        self.worker.cancel_current()
+        self.hide()
         self.thread.quit()
-        self.thread.wait()
+        if not self.thread.wait(1500):
+            os._exit(0)
         super().closeEvent(event)
 
 

@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePo
 class ChatBubble(QFrame):
     """One chat message. role: 'user' | 'assistant' | 'error'."""
 
+    _BADGES = {"user": "YOU", "error": "ERROR", "assistant": "OSIRIS"}
+
     def __init__(self, text: str, role: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("bubble")
@@ -14,10 +16,10 @@ class ChatBubble(QFrame):
         layout.setContentsMargins(14, 10, 14, 12)
         layout.setSpacing(4)
 
-        badge = QLabel({"user": "YOU", "error": "ERROR"}.get(role, "OSIRIS"))
-        badge.setObjectName("bubbleBadge")
-        badge.setProperty("role", role)
-        layout.addWidget(badge)
+        self.badge = QLabel(self._BADGES.get(role, "OSIRIS"))
+        self.badge.setObjectName("bubbleBadge")
+        self.badge.setProperty("role", role)
+        layout.addWidget(self.badge)
 
         self.body = QLabel()
         self.body.setObjectName("bubbleBody")
@@ -39,6 +41,20 @@ class ChatBubble(QFrame):
         chrome = margins.left() + margins.right() + 6
         natural = max((metrics.horizontalAdvance(line) for line in self._text.splitlines()), default=0)
         self.setFixedWidth(min(max_width, max(natural + chrome + 8, 120)))
+
+    def set_text(self, text: str) -> None:
+        self._text = text
+        self.body.setText(text)
+
+    def set_role(self, role: str) -> None:
+        """Restyle in place (e.g. a pending bubble that ends in an error)."""
+        self.setProperty("role", role)
+        self.badge.setProperty("role", role)
+        self.badge.setText(self._BADGES.get(role, "OSIRIS"))
+        self.body.setTextFormat(Qt.MarkdownText if role == "assistant" else Qt.PlainText)
+        for widget in (self, self.badge):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
 
 
 class ChatView(QScrollArea):
@@ -85,6 +101,18 @@ class ChatView(QScrollArea):
         self._bubbles.append(bubble)
         self._scroll_soon()
         return bubble
+
+    def update_bubble(self, bubble: ChatBubble, text: str, role: str | None = None) -> None:
+        """Replace a bubble's text (streaming) and optionally its role. Only follows the
+        bottom if the user was already there, so scrolling up mid-stream isn't yanked back."""
+        bar = self.verticalScrollBar()
+        follow = bar.value() >= bar.maximum() - 40
+        if role is not None:
+            bubble.set_role(role)
+        bubble.set_text(text)
+        bubble.fit_to(self._max_bubble_width())
+        if follow:
+            self._scroll_soon()
 
     def clear(self) -> None:
         while self._layout.count() > 1:  # keep the trailing stretch
