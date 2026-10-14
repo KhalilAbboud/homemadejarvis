@@ -1,35 +1,42 @@
-# Session Handoff State — OSIRIS (v0.1 checkpoint)
+# Session Handoff State — OSIRIS (v0.1 + GUI remodel in progress)
 
-## Last Completed Task
-- **Hybrid/multi-tier local routing in `brain.py`:** `smollm2:1.7b-instruct-q4_0` for fast chitchat, `llama3.2:1b` for general reasoning/code, with a keyword+heuristic scorer (`_pick_local_model`) choosing between them. A separate heuristic (`_is_research_request`) detects research/article/web-lookup intent and offloads those prompts from local mode straight to the Gemini API with tools attached, even when `LLM_MODE=local`.
-- **`apps.py` gained `close_app()`** (force-terminate via `taskkill /F /IM`) and a **persistent allowlist**: `allowed_apps.json` at the repo root, merged with `_DEFAULT_APPS` and `OSIRIS_APP_PATHS`, with `save_allowed_app()`/`remove_allowed_app()` to edit it on disk.
-- **`schemas.py`** gained a `close_app` tool declaration/dispatch/announcement alongside the existing four.
-- **New desktop GUI: `osiris_chat.py`** (PySide6) — dark glassmorphic chat window, sidebar with quick research prompts and an apps panel (add/remove/launch/close), Markdown→HTML rendering with clickable links in `QTextBrowser`, voice mode reusing `listen_and_transcribe`/`speak`. Work (`stream_llm_response`, `listen_and_transcribe`, `speak`) runs on a dedicated `QThread` via `AssistantWorker` so the UI doesn't block during LLM calls.
+## Status
+- Modules 1–4 (STT, brain/router, TTS, tools), the CLI orchestrator (`main.py`) and the PySide6 desktop GUI (`osiris_chat/`) all work.
+- All six urgent code-review items are fixed: brain/tools decoupling, research-router keyword overmatch, `close_app` PID scoping, silent config swallowing in `apps.py`, `stt.py` logger rename, GUI app launch/close on the worker thread with shared `is_exit_command`.
+- Module 5 (wake word) has **not** started. A GUI remodel comes first (plan below).
 
-## ⚠️ Urgent — fix before starting Module 5 (wake word)
-These are regressions/risks introduced by the above, not style nits:
+## Done since the v0.1 checkpoint
+- **GUI models panel:** Ollama fetch moved off the GUI thread (`fetch_models` slot + `models_fetched` signal), polled by a `QTimer` every 5s, so starting Ollama after the app updates the panel.
+- **Phase A, chat rendering:** per-message bubble widgets replace the `QTextBrowser` HTML bubbles (Qt rich text ignored flex, border-radius and box-shadow). New `osiris_chat/chat_widgets.py` holds `ChatBubble` and `ChatView` (`add_message`, `update_bubble`, `clear`). Assistant text renders as markdown via `QLabel`; user and error text stay literal. Link colours come from `QPalette.Link`.
+- **Streaming + thinking + errors:** the worker emits `token_ready`; the window grows a pending bubble ("*Thinking…*") as tokens arrive. Errors turn the pending bubble red instead of opening a `QMessageBox`.
+- **Cancellable worker:** new `osiris_chat/async_runner.py` (`CancellableRunner`) replaces `asyncio.run` in `ask_text`/`ask_voice`. `worker.cancel_current()` is callable from the GUI thread. `closeEvent` cancels, waits 1.5s, then `os._exit(0)` (mic recording and TTS playback run in OS threads that can't be interrupted yet). Optional Send/Stop button wired to the same cancel.
+- **Bug fix in `brain.py`:** tool announcements are yielded with a trailing space. Without it the CLI sentence splitter held "Opening notepad." until the end of the reply, so it was spoken after the tool finished.
+- **Local models changed:** user now runs `phi4-mini` and `qwen3.5:4b` (llama3.2:1b and smollm2 removed). `OLLAMA_MODEL_FAST` / `OLLAMA_MODEL_SMART` in `.env` must match `ollama list`, or `OLLAMA_MODEL` forces one model.
 
-1. **`brain.py` reintroduces the `brain.py → tools/` coupling we deliberately removed, and leaks tool access into project planning.** `stream_llm_response()` now lazily imports `tools.schemas` and auto-attaches `TOOL_DECLARATIONS` whenever `tools=None` is passed. `main.py`'s `_stream_plan_to_console()` calls `stream_llm_response()` without `tools` — so planning requests silently get `launch_app`/`search_web` etc. attached, which was explicitly designed never to happen (planning should be pure text generation). **Fix:** remove the lazy-load block; every caller that wants tools passes them explicitly (as `main.py`'s chat path and `test_text_mode.py` already do). If `osiris_chat.py` wants defaults, it should import `tools.schemas` itself — it already imports `tools.apps` directly, so that's consistent.
-2. **Hybrid local→cloud router over-matches on common words.** `_WEB_ACTION_KEYWORDS` includes `"find"`/`"look for"`, and the target-word list includes `"for"`/`"about"` — near-universal words. `"look for errors in my code"` or `"find a bug in this function"` will match and get silently offloaded to Gemini with web tools attached, even in `LLM_MODE=local`. This defeats local mode's privacy/latency guarantee for a lot of ordinary prompts. Needs a tighter rule (require an explicit web-ish noun like "article"/"web"/"online" to actually co-occur, not filler words like "for").
-3. **`close_app()` kills by executable name system-wide, not by the process OSIRIS launched.** `taskkill /F /IM <exe_name>` terminates *every* running instance of that binary. `launch_app()` doesn't track the `Popen` PID it creates, so there's no way to scope a close to just what OSIRIS opened. For anything with multiple windows/instances (a browser, say) this is a real destructive blast radius with no confirmation step. **Fix:** store the PID (or `Popen` handle) per launch, kill by PID, and only fall back to by-name if that's an accepted tradeoff.
-4. **Config-loading failures are now silently swallowed in `apps.py`.** Both the `allowed_apps.json` read and the `OSIRIS_APP_PATHS` parse do bare `except Exception: pass`. A typo'd JSON file reverts to defaults with zero log output — you'd have no way to tell why an app you added isn't showing up.
-5. **`stt.py`'s logger is still named `"jarvis.stt"`** — every other module renamed to `osiris.*`; this one was missed.
-6. **`osiris_chat.py`'s app launch/close buttons bypass the worker thread.** `_handle_app_launch`/`_handle_app_close` call `asyncio.run(...)` directly on the Qt main thread instead of routing through `AssistantWorker`'s `QThread` like chat/voice do — inconsistent, and risks a UI freeze if a launch ever blocks. They also re-implement exit-phrase handling separately rather than reusing `main.py`'s negation-aware `_is_exit_command`.
+## Repo layout (relevant parts)
+```
+src/        brain.py main.py stt.py tts.py voice_commands.py tools/{apps,planner,schemas,system_info,web}.py
+osiris_chat/ osiris_chat.py chat_widgets.py async_runner.py
+allowed_apps.json  .env  docs/{ARCHITECTURE,CODING_RULES,HANDOFF}.md
+```
 
-Priority: **#1 and #3** are the ones to actually block on (behavioral regression that defeats a deliberate design decision; destructive action with no scoping). #2 undermines local mode's whole point. #4–6 are quick cleanups.
+## Remodel plan (pre-Module 5)
+- **A. Chat rendering** — done, user is verifying. Check: bubbles + right-aligned user messages, streaming, error bubble with Ollama stopped, instant close mid-reply, Stop button, announcement spacing.
+- **B. Usability** — next: (B1) Close button next to each Open; (B2) starter-prompt chips in the empty chat, hidden after first message; (B3) shortcuts Ctrl+L clear, Ctrl+K focus input, Esc clear input; (B4) models-panel refresh button + "checked HH:MM", skip the 5s poll while a fetch or chat is running.
+- **C. Aesthetics** — system card to fill the right panel (LLM mode, TTS engine, active models); window icon + header logo; SVG icons in `assets/` instead of emoji; 8px spacing grid and scrollbar restyle.
+- **D. Repo polish** — README, `requirements.txt`, `.env.example` (replacing `fakeenv.txt`), delete `garbage info/`, gitignore `.kilo/` and `.sixth/`, pytest tests for `is_exit_command`, `_is_research_request`, `_pick_local_model`.
+- **Deferred to Module 5:** tray icon + hide-to-tray, voice cancel button + mic level meter (need a stop event in `stt.py`), settings view (modules read `.env` at import), shared stream-to-speech helper for GUI and CLI.
 
-## Current State
-- Modules 1–4 + orchestrator (`main.py`) + a new desktop GUI (`osiris_chat.py`) all functional.
-- Tool-calling (Gemini function-calling, real multi-turn loop with `thought_signature` preserved) works in API mode and is auto-offloaded to from local mode for research-flavored prompts (see urgent #2 above for the matching bug).
-- `.env`: `LLM_MODE=local` by default, `OLLAMA_MODEL_FAST=smollm2:1.7b-instruct-q4_0`, `OLLAMA_MODEL_SMART=llama3.2:1b`, legacy `OLLAMA_MODEL` still honored if set.
-- Mic input stable (sample-rate probing + resample, documented in earlier handoff); `STT_INPUT_DEVICE` left unset.
-
-## Project Roadmap (Remaining Steps)
-1. **Step 5 (next, after urgent fixes above):** Wake word (`wake_word.py`) — passive "Hey OSIRIS" detection via `openwakeword`, gating `listen_and_transcribe()`. Needs wiring into *both* `main.py`'s loop and `osiris_chat.py`'s voice mode.
-2. **Step 6:** Conversation memory — short-term chat history across turns (currently every turn, in both CLI and GUI, is a stateless single prompt).
+## Known issues, not blocking
+- Sentence regex in `main.py` splits on `Dr.`, `v1.0`, `$4.50`.
+- TTS cache in the temp folder is never pruned.
+- `main.py` does not await STT/TTS warm-up before the first listen.
+- GUI voice path is not streamed (full reply, then `speak`); text path streams.
+- Closing during mic recording or TTS playback still hits the `os._exit` fallback.
+- DuckDuckGo HTML scraping in `web.py` can break if their markup changes.
 
 ## Next Task
-Fix the six items above, then build `wake_word.py`.
+Finish verifying Phase A, then build Phase B (B1–B4), then C and D, then start Module 5.
 
 ## Next Prompt to Run
-"Following `CODING_RULES.md` and `ARCHITECTURE.md`: first fix the urgent items in HANDOFF.md (decouple brain.py from tools/, tighten the hybrid research-routing keywords, scope close_app to the launched PID, stop swallowing config errors in apps.py, rename stt.py's logger to osiris.stt, move osiris_chat.py's app launch/close onto the worker thread). Then build wake_word.py: passive 'Hey OSIRIS' detection via openwakeword, wired into both main.py's loop and osiris_chat.py's voice mode."
+"Following CODING_RULES.md, Phase A of the osiris_chat remodel is verified. Do Phase B from HANDOFF.md (B1 Close buttons, B2 starter chips, B3 shortcuts, B4 models refresh). Point out the edits instead of rewriting whole files."
