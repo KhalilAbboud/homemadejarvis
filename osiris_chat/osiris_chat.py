@@ -243,6 +243,7 @@ class OsirisDesktopWindow(QMainWindow):
         super().__init__()
         self._pending_bubble = None
         self._stream_text = ""
+        self._pending_bubble = self.chat_log.add_message("*Thinking…*", "assistant")
         self.setWindowTitle("OSIRIS")
         self.resize(1260, 820)
         self.setMinimumSize(960, 680)
@@ -271,6 +272,7 @@ class OsirisDesktopWindow(QMainWindow):
         self.worker.app_close_requested.connect(self.worker.do_close_app)
         self.worker.models_fetched.connect(self._on_models_fetched)
         self.worker.models_requested.connect(self.worker.fetch_models)
+        self.worker.token_ready.connect(self._on_token)
         self.worker.cancelled.connect(self._on_cancelled)
 
         self.send_button.clicked.connect(self._on_send_clicked)
