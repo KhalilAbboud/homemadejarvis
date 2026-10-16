@@ -1001,6 +1001,7 @@ class OsirisDesktopWindow(QMainWindow):
         self._append_chat("You", text, "right")
         self.text_input.clear()
         self.send_button.setText("Stop")
+        self._stream_text = ""
         self._pending_bubble = self.chat_log.add_message("*Thinking…*", "assistant")
         self.worker.text_requested.emit(text)
 

@@ -131,18 +131,20 @@ async def launch_app(app: str) -> AppLaunchResult:
 
 
 def _close_process(target: str, pid: int | None) -> int:
+    """1 = killed the launched PID, 2 = killed by executable name, 0 = nothing killed."""
     if pid is not None:
         try:
             res = subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, text=True, check=False)
-            return 1 if res.returncode == 0 else 0
+            if res.returncode == 0:
+                return 1
         except Exception:
-            return 0
+            pass
+        # PID may belong to a launcher stub that already exited (calc.exe); fall through.
     if not target.lower().endswith(".exe"):
         return 0
-    exe_name = Path(target).name
     try:
-        res = subprocess.run(["taskkill", "/F", "/IM", exe_name], capture_output=True, text=True, check=False)
-        return 1 if res.returncode == 0 else 0
+        res = subprocess.run(["taskkill", "/F", "/IM", Path(target).name], capture_output=True, text=True, check=False)
+        return 2 if res.returncode == 0 else 0
     except Exception:
         return 0
 
@@ -160,6 +162,6 @@ async def close_app(app: str) -> str:
     pid = _launched_pids.pop(normalized, None)
     killed = await asyncio.to_thread(_close_process, target, pid)
     if killed:
-        scope = "the window I opened" if pid is not None else f"all running {normalized}"
+        scope = "the window I opened" if killed == 1 else f"all running {normalized}"
         return f"Successfully closed {scope}."
     return f"{normalized} was closed or not currently running."
