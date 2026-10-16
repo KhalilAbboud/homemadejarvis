@@ -243,7 +243,6 @@ class OsirisDesktopWindow(QMainWindow):
         super().__init__()
         self._pending_bubble = None
         self._stream_text = ""
-        self._pending_bubble = self.chat_log.add_message("*Thinking…*", "assistant")
         self.setWindowTitle("OSIRIS")
         self.resize(1260, 820)
         self.setMinimumSize(960, 680)
@@ -1002,6 +1001,7 @@ class OsirisDesktopWindow(QMainWindow):
         self._append_chat("You", text, "right")
         self.text_input.clear()
         self.send_button.setText("Stop")
+        self._pending_bubble = self.chat_log.add_message("*Thinking…*", "assistant")
         self.worker.text_requested.emit(text)
 
     def _start_voice_turn(self) -> None:
