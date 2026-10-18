@@ -24,6 +24,21 @@ _PERSISTENT_FILE = Path(__file__).resolve().parent.parent.parent / "allowed_apps
 
 _launched_pids: dict[str, int] = {}
 
+# Launcher stubs / URIs whose real process has a different image name.
+_CLOSE_IMAGES: Final[dict[str, tuple[str, ...]]] = {
+    "calc.exe": ("CalculatorApp.exe", "Calculator.exe", "calc.exe"),
+    "ms-settings:": ("SystemSettings.exe",),
+}
+
+
+def _image_names(target: str) -> tuple[str, ...]:
+    key = target.strip().lower()
+    if key in _CLOSE_IMAGES:
+        return _CLOSE_IMAGES[key]
+    if key.endswith(".exe"):
+        return (Path(target).name,)
+    return ()
+
 
 class AppError(RuntimeError):
     """Raised when an application cannot be launched safely."""
@@ -140,13 +155,15 @@ def _close_process(target: str, pid: int | None) -> int:
         except Exception:
             pass
         # PID may belong to a launcher stub that already exited (calc.exe); fall through.
-    if not target.lower().endswith(".exe"):
-        return 0
-    try:
-        res = subprocess.run(["taskkill", "/F", "/IM", Path(target).name], capture_output=True, text=True, check=False)
-        return 2 if res.returncode == 0 else 0
-    except Exception:
-        return 0
+        killed_any = False
+    for image in _image_names(target):
+        try:
+            res = subprocess.run(["taskkill", "/F", "/IM", image], capture_output=True, text=True, check=False)
+        except Exception:
+            continue
+        if res.returncode == 0:
+            killed_any = True
+    return 2 if killed_any else 0
 
 
 async def close_app(app: str) -> str:

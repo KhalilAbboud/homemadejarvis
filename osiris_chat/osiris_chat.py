@@ -713,6 +713,19 @@ class OsirisDesktopWindow(QMainWindow):
         self.chat_log = ChatView()
         cv_layout.addWidget(self.chat_log)
 
+        self.chips_box = QFrame(objectName="chipBox")
+        chips_layout = QHBoxLayout(self.chips_box)
+        chips_layout.setContentsMargins(8, 8, 8, 8)
+        chips_layout.setSpacing(8)
+        for prompt in STARTER_PROMPTS:
+            chip = QPushButton(prompt)
+            chip.setProperty("class", "PromptChip")
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.clicked.connect(lambda checked=False, p=prompt: self._use_starter(p))
+            chips_layout.addWidget(chip)
+        chips_layout.addStretch()
+        cv_layout.addWidget(self.chips_box)
+
         # Input Row
         input_card = QFrame(objectName="inputContainer")
         ic_layout = QHBoxLayout(input_card)
@@ -973,12 +986,15 @@ class OsirisDesktopWindow(QMainWindow):
         self.chat_log.clear()
         self._pending_bubble = None
         self._append_chat("OSIRIS", "Chat history cleared. How may I assist you now?", "left")
+        self.chips_box.show()
 
     def _handle_link_click(self, url: QUrl) -> None:
         QDesktopServices.openUrl(url)
 
     def _append_chat(self, speaker: str, message: str, alignment: str) -> None:
         role = "user" if alignment == "right" else "assistant"
+        if role == "user":
+            self.chips_box.hide()
         self.chat_log.add_message(message, role)
 
     def set_status(self, message: str) -> None:
@@ -1021,6 +1037,10 @@ class OsirisDesktopWindow(QMainWindow):
     def _start_voice_turn(self) -> None:
         self.listen_button.setEnabled(False)
         self.worker.voice_requested.emit()
+
+    def _use_starter(self, prompt: str) -> None:
+        self.text_input.setText(prompt)
+        self._send_text_message()
     
     def _on_token(self, token: str) -> None:
         if self._pending_bubble is None:
