@@ -248,6 +248,8 @@ class OsirisDesktopWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._pending_bubble = None
+        self._models_fetching = False
+        self._last_models: tuple | None = None
         self._stream_text = ""
         self.setWindowTitle("OSIRIS")
         self.resize(1260, 820)
@@ -276,19 +278,23 @@ class OsirisDesktopWindow(QMainWindow):
         self.worker.app_launch_requested.connect(self.worker.do_launch_app)
         self.worker.app_close_requested.connect(self.worker.do_close_app)
         self.worker.models_fetched.connect(self._on_models_fetched)
-        self.worker.models_requested.connect(self.worker.fetch_models)
         self.worker.token_ready.connect(self._on_token)
         self.worker.cancelled.connect(self._on_cancelled)
+        self.worker.models_requested.connect(self.worker.fetch_models)
 
         self.send_button.clicked.connect(self._on_send_clicked)
         self.text_input.returnPressed.connect(self._send_text_message)
         self.clear_button.clicked.connect(self._clear_chat) 
         self.listen_button.clicked.connect(self._start_voice_turn)
 
-        self.worker.models_requested.emit()
+        QShortcut(QKeySequence("Ctrl+L"), self, activated=self._clear_chat)
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self._focus_input)
+        QShortcut(QKeySequence("Esc"), self, activated=self.text_input.clear)
+
+        self._request_models(force=True)
         self.models_poll_timer = QTimer(self)
         self.models_poll_timer.setInterval(5000)
-        self.models_poll_timer.timeout.connect(self.worker.models_requested.emit)
+        self.models_poll_timer.timeout.connect(self._request_models)
         self.models_poll_timer.start()
         self.set_status("Ready")
 
@@ -786,8 +792,19 @@ class OsirisDesktopWindow(QMainWindow):
         rp_layout.setSpacing(12)
 
         # Top block: Models in machine
-        models_header = QLabel("MACHINE MODELS", objectName="sidebarTitle")
-        rp_layout.addWidget(models_header)
+        models_header_row = QHBoxLayout()
+        models_header_row.addWidget(QLabel("MACHINE MODELS", objectName="sidebarTitle"))
+        models_header_row.addStretch()
+        self.btn_refresh_models = QPushButton("⟳")
+        self.btn_refresh_models.setProperty("class", "MiniIconBtn")
+        self.btn_refresh_models.setToolTip("Refresh models")
+        self.btn_refresh_models.clicked.connect(lambda: self._request_models(force=True))
+        models_header_row.addWidget(self.btn_refresh_models)
+        rp_layout.addLayout(models_header_row)
+
+        self.models_checked_label = QLabel("Not checked yet")
+        self.models_checked_label.setProperty("class", "ModelDetail")
+        rp_layout.addWidget(self.models_checked_label)
 
         models_box = QFrame()
         models_box.setProperty("class", "CardBox")
@@ -983,6 +1000,8 @@ class OsirisDesktopWindow(QMainWindow):
         self.worker.app_close_requested.emit(app_name)
 
     def _clear_chat(self) -> None:
+        if self._pending_bubble is not None:
+            self.worker.cancel_current()
         self.chat_log.clear()
         self._pending_bubble = None
         self._append_chat("OSIRIS", "Chat history cleared. How may I assist you now?", "left")
@@ -1037,6 +1056,11 @@ class OsirisDesktopWindow(QMainWindow):
     def _start_voice_turn(self) -> None:
         self.listen_button.setEnabled(False)
         self.worker.voice_requested.emit()
+    
+    def _focus_input(self) -> None:
+        self._switch_view(0)
+        self.text_input.setFocus()
+        self.text_input.selectAll()
 
     def _use_starter(self, prompt: str) -> None:
         self.text_input.setText(prompt)
@@ -1082,8 +1106,24 @@ class OsirisDesktopWindow(QMainWindow):
     def _on_app_action_done(self, app_name: str, message: str) -> None:
         self._append_chat("OSIRIS", message, "left")
 
+    def _request_models(self, force: bool = False) -> None:
+        """Poll tick or manual refresh. The worker thread is single and ask_text/ask_voice block it,
+        so an unguarded poll would queue a fetch behind every running chat."""
+        if self._models_fetching:
+            return
+        busy = self._pending_bubble is not None or not self.listen_button.isEnabled()
+        if busy and not force:
+            return
+        self._models_fetching = True
+        self.worker.models_requested.emit()
+
     def _on_models_fetched(self, models: list, ollama_online: bool) -> None:
-        self._render_models_panel(models, ollama_online)
+        self._models_fetching = False
+        self.models_checked_label.setText(f"checked {datetime.now():%H:%M}")
+        snapshot = (tuple((m["name"], m["info"]) for m in models), ollama_online)
+        if snapshot != self._last_models:  # skip rebuilding widgets when nothing changed
+            self._last_models = snapshot
+            self._render_models_panel(models, ollama_online)
     
     def _on_cancelled(self) -> None:
         if self._pending_bubble is not None:
