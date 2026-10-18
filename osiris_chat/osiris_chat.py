@@ -10,6 +10,7 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
+from datetime import datetime 
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -20,7 +21,7 @@ from voice_commands import is_exit_command
 from chat_widgets import ChatView
 
 from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot, Qt
-from PySide6.QtGui import QDesktopServices, QFont, QIcon
+from PySide6.QtGui import QDesktopServices, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -237,6 +238,11 @@ class AssistantWorker(QObject):
         except Exception as exc:
             self.error_occurred.emit(f"OSIRIS error: {exc}")
 
+STARTER_PROMPTS = ( #constants
+    "What are my system specs?",
+    "Search the web for AI news",
+    "Open notepad",
+)
 
 class OsirisDesktopWindow(QMainWindow):
     def __init__(self) -> None:
@@ -281,7 +287,7 @@ class OsirisDesktopWindow(QMainWindow):
 
         self.worker.models_requested.emit()
         self.models_poll_timer = QTimer(self)
-        self.models_poll_timer.setInterval(1000)
+        self.models_poll_timer.setInterval(5000)
         self.models_poll_timer.timeout.connect(self.worker.models_requested.emit)
         self.models_poll_timer.start()
         self.set_status("Ready")
@@ -879,6 +885,8 @@ class OsirisDesktopWindow(QMainWindow):
             title_col.addWidget(name_lbl)
 
             target_lbl = QLabel(target)
+            target_lbl.setToolTip(target)
+            target_lbl.setText(target_lbl.fontMetrics().elidedText(target, Qt.ElideMiddle, 110))
             target_lbl.setProperty("class", "ModelDetail")
             title_col.addWidget(target_lbl)
             a_layout.addLayout(title_col, stretch=1)
@@ -887,6 +895,11 @@ class OsirisDesktopWindow(QMainWindow):
             btn_open.setProperty("class", "AppActionBtn AppOpenBtn")
             btn_open.clicked.connect(lambda checked=False, app_name=name: self._handle_app_launch(app_name))
             a_layout.addWidget(btn_open)
+
+            btn_close = QPushButton("Close")
+            btn_close.setProperty("class", "AppActionBtn AppCloseBtn")
+            btn_close.clicked.connect(lambda checked=False, app_name=name: self._handle_app_close(app_name))
+            a_layout.addWidget(btn_close)
 
             self.apps_box_layout.addWidget(a_card)
 
